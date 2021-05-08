@@ -1,0 +1,10 @@
+[package]
+name = "hrc"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+generational-arena = { git = "https://github.com/fitzgen/generational-arena.git", default-features = false }
+space = { version = "0.11.0", default-features = false }
+core_simd = { git = "https://github.com/rust-lang/stdsimd.git", default-features = false }
+bitvec = { version = "0.22.3", default-features = false, features = ["alloc"] }
