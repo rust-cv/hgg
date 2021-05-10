@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use bitvec::vec::BitVec;
 use space::MetricPoint;
 
-struct HrcCore<K, V, const N: usize> {
+pub struct HrcCore<K, V, const N: usize> {
     /// Each layer maps keys (representing the cluster center) to the index in the next layer (as a u32).
     layers: Vec<HrcLayer<K, u32, N>>,
     /// The bottom layer maps keys directly into values.
@@ -23,7 +23,7 @@ where
     /// Any unoccupied spots will be filled with an empty LayerIndex, which contains only `!0`.
     ///
     /// Returns the number of candidates populated
-    fn search(
+    pub fn search(
         &self,
         query: &K,
         candidates: &mut [(LayerIndex, u32)],
@@ -171,7 +171,7 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-struct LayerIndex {
+pub struct LayerIndex {
     cluster: u32,
     item: u32,
 }
