@@ -12,6 +12,28 @@ struct HrcCore<K, V, const N: usize> {
     values: HrcLayer<K, V, N>,
 }
 
+impl<K, V, const N: usize> HrcCore<K, V, N>
+where
+    K: MetricPoint,
+{
+    /// Searches down to the bottom layer, placing the best candidate items into the slice from best to worst.
+    ///
+    /// `to_search` and `searched` will get cleared and used during the search.
+    ///
+    /// Any unoccupied spots will be filled with an empty LayerIndex, which contains only `!0`.
+    ///
+    /// Returns the number of candidates populated
+    fn search(
+        &self,
+        query: &K,
+        candidates: &mut [(LayerIndex, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) -> usize {
+        unimplemented!()
+    }
+}
+
 struct HrcLayer<K, V, const N: usize> {
     clusters: Vec<HrcCluster<K, V, N>>,
 }
@@ -22,11 +44,12 @@ where
 {
     /// Searches the layer, placing the best candidate items into the slice from best to worst.
     ///
-    /// `to_search` must contain the starting clusters to begin search from.
+    /// `to_search` must contain the starting clusters to begin search from. `searched` will get cleared
+    /// and used during the search.
     ///
     /// Any unoccupied spots will be filled with an empty LayerIndex, which contains only `!0`.
     ///
-    /// Returns the number of candidates populated.
+    /// Returns the number of candidates populated
     fn search(
         &self,
         query: &K,
@@ -49,10 +72,10 @@ where
             let mut must_beat = candidates.last().unwrap().1;
             let cluster = &self.clusters[cluster_ix as usize];
             let center_distance = cluster.center_distance(query);
-            let keys = cluster.potential_closer_items(center_distance, must_beat);
+            let (keys, potential) = cluster.potential_closer_items(center_distance, must_beat);
 
-            // If this cluster has nothing to offer us, we should just skip it and not add its neighbors.
-            if keys.is_empty() {
+            // If this cluster is totally out of range, we should just skip it and not add its neighbors.
+            if !potential {
                 continue;
             }
 
@@ -114,13 +137,17 @@ where
             .unwrap()
     }
 
-    /// Returns the slice of keys and values that could beat a given distance.
-    fn potential_closer_items(&self, center_distance: u32, must_beat: u32) -> &[K] {
+    /// Returns the slice of keys and values that could beat a given distance and a bool indicating if the
+    /// cluster radius distance could have encompassed a relevant point.
+    fn potential_closer_items(&self, center_distance: u32, must_beat: u32) -> (&[K], bool) {
         let minimum_inclusive = (center_distance + 1).saturating_sub(must_beat);
         let maximum_exclusive = center_distance.saturating_add(must_beat);
         let begin = self.distances.partition_point(|&d| d < minimum_inclusive);
         let end = self.distances.partition_point(|&d| d < maximum_exclusive);
-        &self.keys[begin..end]
+        (
+            &self.keys[begin..end],
+            minimum_inclusive <= *self.distances.last().unwrap(),
+        )
     }
 
     /// Computes the distance to the center of the cluster.
