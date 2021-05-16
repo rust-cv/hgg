@@ -418,13 +418,6 @@ where
         }
     }
 
-    /// Adds a new neighbor to the cluster if it wasn't present before and keeps the neighbors sorted.
-    fn add_neighbor(&mut self, neighbor: u32) {
-        if let Err(position) = self.neighbors.binary_search(&neighbor) {
-            self.neighbors.insert(position, neighbor);
-        }
-    }
-
     /// Returns (index, distance) to closest member (biased towards beginning of vector).
     fn closest_to(&self, key: &K) -> (usize, u32) {
         self.keys
