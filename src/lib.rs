@@ -1,18 +1,22 @@
 #![no_std]
 extern crate alloc;
 
+#[cfg(test)]
+mod unit_tests;
+
+use alloc::vec;
 use alloc::vec::Vec;
 use bitvec::vec::BitVec;
 use space::MetricPoint;
 
-pub struct HrcCore<K, V, const N: usize> {
+pub struct HrcCore<K, V> {
     /// Each layer maps keys (representing the cluster center) to the index in the next layer (as a u32).
-    layers: Vec<HrcLayer<K, u32, N>>,
+    layers: Vec<HrcLayer<K, u32>>,
     /// The bottom layer maps keys directly into values.
-    values: HrcLayer<K, V, N>,
+    values: HrcLayer<K, V>,
 }
 
-impl<K, V, const N: usize> HrcCore<K, V, N>
+impl<K, V> HrcCore<K, V>
 where
     K: MetricPoint,
 {
@@ -30,15 +34,22 @@ where
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) -> usize {
-        unimplemented!()
+        // Go through each layer from the highest to the lowest.
+        for layer_ix in (0..self.layers.len()).rev() {
+            // Clear the candidates.
+            candidates.fill((LayerIndex::empty(), !0));
+        }
+
+        // Find the number of non-empty candidates.
+        candidates.partition_point(|n| !n.0.is_empty())
     }
 }
 
-struct HrcLayer<K, V, const N: usize> {
-    clusters: Vec<HrcCluster<K, V, N>>,
+pub struct HrcLayer<K, V> {
+    clusters: Vec<HrcCluster<K, V>>,
 }
 
-impl<K, V, const N: usize> HrcLayer<K, V, N>
+impl<K, V> HrcLayer<K, V>
 where
     K: MetricPoint,
 {
@@ -103,7 +114,7 @@ where
 
             // Set neighbor clusters as searched and add them to the to_search pool only if they weren't already searched.
             for &cluster_ix in &cluster.neighbors {
-                if *searched.get(cluster_ix as usize).unwrap() {
+                if !*searched.get(cluster_ix as usize).unwrap() {
                     searched.set(cluster_ix as usize, true);
                     to_search.push(cluster_ix);
                 }
@@ -115,7 +126,7 @@ where
 }
 
 /// Must contain at least one item. The first item is the cluster center.
-struct HrcCluster<K, V, const N: usize> {
+struct HrcCluster<K, V> {
     neighbors: Vec<u32>,
     keys: Vec<K>,
     values: Vec<V>,
@@ -123,10 +134,20 @@ struct HrcCluster<K, V, const N: usize> {
     distances: Vec<u32>,
 }
 
-impl<K, V, const N: usize> HrcCluster<K, V, N>
+impl<K, V> HrcCluster<K, V>
 where
     K: MetricPoint,
 {
+    /// Creates a new cluster with the given center.
+    fn new(key: K, value: V) -> Self {
+        Self {
+            neighbors: vec![],
+            keys: vec![key],
+            values: vec![value],
+            distances: vec![0],
+        }
+    }
+
     /// Returns (index, distance) to closest member (biased towards beginning of vector).
     fn closest_to(&self, key: &K) -> (usize, u32) {
         self.keys
