@@ -34,14 +34,39 @@ where
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) -> usize {
-        // Go through each layer from the highest to the lowest.
-        for layer_ix in (0..self.layers.len()).rev() {
-            // Clear the candidates.
+        // The below assumes that there is at least one cluster on some level, so exit if this is totally empty.
+        if self.is_empty() {
             candidates.fill((LayerIndex::empty(), !0));
+            return 0;
         }
 
-        // Find the number of non-empty candidates.
-        candidates.partition_point(|n| !n.0.is_empty())
+        // We need to initialize to_search to only pull in the first cluster from the highest layer.
+        to_search.clear();
+        to_search.push(0);
+
+        // Go through each layer from the highest to the lowest.
+        for layer in self.layers.iter().rev() {
+            // Search this layer for the best candidates.
+            let found = layer.search(query, candidates, to_search, searched);
+            // The values from this layer are cluster IDs from the next layer, use those to populate the to_search.
+            to_search.extend(
+                candidates[..found]
+                    .iter()
+                    .map(|&(ix, _)| *layer.get(ix).unwrap()),
+            );
+        }
+
+        // Now the to_search should contain value layer cluster IDs, so use them to search the value layer.
+        self.values.search(query, candidates, to_search, searched)
+    }
+
+    /// Retrieves the value from a [`LayerIndex`].
+    fn get(&self, ix: LayerIndex) -> Option<&V> {
+        self.values.get(ix)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.clusters.is_empty()
     }
 }
 
@@ -124,7 +149,7 @@ where
         candidates.partition_point(|n| !n.0.is_empty())
     }
 
-    /// Retrieves the item from a [`LayerIndex`].
+    /// Retrieves the value from a [`LayerIndex`].
     fn get(&self, ix: LayerIndex) -> Option<&V> {
         self.clusters
             .get(ix.cluster as usize)

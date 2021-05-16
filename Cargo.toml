@@ -2,6 +2,7 @@
 name = "hrc"
 version = "0.1.0"
 edition = "2018"
+resolver = "2"
 
 [dependencies]
 space = { version = "0.11.0", default-features = false }
