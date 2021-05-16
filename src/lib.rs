@@ -60,6 +60,11 @@ where
         self.values.search(query, candidates, to_search, searched)
     }
 
+    /// Inserts an item into the HRC.
+    fn insert(&mut self, key: K, value: V) {
+        unimplemented!()
+    }
+
     /// Retrieves the value from a [`LayerIndex`].
     fn get(&self, ix: LayerIndex) -> Option<&V> {
         self.values.get(ix)
@@ -159,6 +164,7 @@ where
 
 /// Must contain at least one item. The first item is the cluster center.
 struct HrcCluster<K, V> {
+    key: K,
     neighbors: Vec<u32>,
     keys: Vec<K>,
     values: Vec<V>,
@@ -171,12 +177,13 @@ where
     K: MetricPoint,
 {
     /// Creates a new cluster with the given center.
-    fn new(key: K, value: V) -> Self {
+    fn new(key: K) -> Self {
         Self {
+            key,
             neighbors: vec![],
-            keys: vec![key],
-            values: vec![value],
-            distances: vec![0],
+            keys: vec![],
+            values: vec![],
+            distances: vec![],
         }
     }
 
@@ -199,13 +206,13 @@ where
         let end = self.distances.partition_point(|&d| d < maximum_exclusive);
         (
             &self.keys[begin..end],
-            minimum_inclusive <= *self.distances.last().unwrap(),
+            minimum_inclusive <= self.distances.last().copied().unwrap_or(0),
         )
     }
 
     /// Computes the distance to the center of the cluster.
     fn center_distance(&self, key: &K) -> u32 {
-        self.keys[0].distance(key)
+        self.key.distance(key)
     }
 
     /// Inserts an item into the cluster.

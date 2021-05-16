@@ -4,20 +4,23 @@ use bitvec::vec::BitVec;
 use space::Hamming;
 
 fn test_layer() -> HrcLayer<Hamming<u8>, &'static str> {
-    let mut first_cluster = HrcCluster::new(Hamming(0b1101), "a");
+    let mut first_cluster = HrcCluster::new(Hamming(0b1101));
+    first_cluster.insert(Hamming(0b1101), "a");
     first_cluster.insert(Hamming(0b1001), "b");
     first_cluster.insert(Hamming(0b1100), "c");
     first_cluster.insert(Hamming(0b0101), "d");
     first_cluster.neighbors.push(1);
 
-    let mut second_cluster = HrcCluster::new(Hamming(0b0010), "q");
+    let mut second_cluster = HrcCluster::new(Hamming(0b0010));
+    second_cluster.insert(Hamming(0b0010), "q");
     second_cluster.insert(Hamming(0b0110), "r");
     second_cluster.insert(Hamming(0b0000), "s");
     second_cluster.insert(Hamming(0b0011), "t");
     second_cluster.neighbors.push(0);
     second_cluster.neighbors.push(2);
 
-    let mut third_cluster = HrcCluster::new(Hamming(0b11110010), "w");
+    let mut third_cluster = HrcCluster::new(Hamming(0b11110010));
+    third_cluster.insert(Hamming(0b11110010), "w");
     third_cluster.insert(Hamming(0b11110110), "x");
     third_cluster.insert(Hamming(0b11110000), "y");
     third_cluster.insert(Hamming(0b11110011), "z");
