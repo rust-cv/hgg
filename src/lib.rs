@@ -7,6 +7,7 @@ mod unit_tests;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitvec::vec::BitVec;
+use itertools::Itertools;
 use space::MetricPoint;
 
 pub struct HrcCore<K, V> {
@@ -18,9 +19,8 @@ pub struct HrcCore<K, V> {
     len: usize,
     /// Clusters with more items than this are split apart.
     max_cluster_len: usize,
-    /// The number of value layer clusters to keep as candidates while searching the bottom layer when inserting.
-    /// Cannot be 0.
-    insertion_candidate_pool_len: usize,
+    /// Number of clusters before a new layer is created.
+    new_layer_threshold_clusters: usize,
 }
 
 impl<K, V> HrcCore<K, V>
@@ -73,6 +73,7 @@ where
         key: K,
         value: V,
         candidates: &mut [(LayerIndex, u32)],
+        value_candidates: &mut [(u32, u32)],
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
@@ -102,21 +103,141 @@ where
         }
 
         // When we search the value layer, we only need to search the clusters to find the best match.
-        let mut candidates = vec![(!0, !0); self.insertion_candidate_pool_len];
         self.values
-            .search_clusters(&key, &mut candidates, to_search, searched);
+            .search_clusters(&key, value_candidates, to_search, searched);
 
-        self.values.clusters[candidates[0].0 as usize].insert(key, value);
+        self.values.clusters[value_candidates[0].0 as usize].insert(key, value);
 
-        if self.values.clusters[candidates[0].0 as usize].len() > self.max_cluster_len {
-            self.split_value_cluster(candidates[0].0 as usize);
+        if self.values.clusters[value_candidates[0].0 as usize].len() > self.max_cluster_len {
+            self.split_value_cluster(
+                value_candidates[0].0 as usize,
+                candidates,
+                value_candidates,
+                to_search,
+                searched,
+            );
         }
 
         self.len += 1;
     }
 
     /// Splits a value layer cluster.
-    fn split_value_cluster(&mut self, cluster_ix: usize) {
+    fn split_value_cluster(
+        &mut self,
+        cluster_ix: usize,
+        candidates: &mut [(LayerIndex, u32)],
+        value_candidates: &mut [(u32, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) {
+        // Start by taking the furthest item from the cluster center out of the cluster.
+        let (key, value) = self.values.clusters[cluster_ix].remove_furthest();
+
+        // Now we perform a standard search on the cluster to find the nearest neighbors to this key.
+        let found = self.search(&key, candidates, to_search, searched);
+
+        // Create a new cluster and add the key and value to it.
+        let new_cluster_ix = self.values.clusters.len() as u32;
+        let mut new_cluster = HrcCluster::new(key.clone());
+        new_cluster.insert(key.clone(), value);
+
+        // Check each of the found items in reverse.
+        // Going in reverse is necessary to make sure when we remove items we don't disturb indicies
+        // from other items we need to retrieve next.
+        for &(layer_ix, distance) in candidates[..found].iter().rev() {
+            // Get the cluster the item belongs to.
+            let other_cluster = &mut self.values.clusters[layer_ix.cluster as usize];
+            // Get the distance of the item to its own cluster.
+            let distance_to_other_cluster = other_cluster.distances[layer_ix.item as usize];
+            // If the distance is closer to this cluster.
+            if distance < distance_to_other_cluster {
+                // Remove this item from the other cluster.
+                let (key, value) = other_cluster.remove(layer_ix.item as usize);
+                // Insert it to the new cluster.
+                new_cluster.insert(key, value);
+            }
+        }
+
+        // Grab all of the found neighbor clusters deduped and put them into to_search.
+        to_search.clear();
+        to_search.extend(
+            candidates[..found]
+                .iter()
+                .map(|(layer_ix, _)| layer_ix.cluster)
+                .dedup(),
+        );
+
+        // Search clusters on the values to find the closest clusters.
+        let found = self
+            .values
+            .search_clusters(&key, value_candidates, to_search, searched);
+
+        // Iterate through the closest clusters.
+        for &(other_cluster_ix, _) in &value_candidates[..found] {
+            // Connect the two clusters together.
+            // These should not contain each other.
+            self.values.clusters[other_cluster_ix as usize]
+                .neighbors
+                .push(new_cluster_ix);
+            new_cluster.neighbors.push(other_cluster_ix);
+        }
+
+        let new_cluster_len = new_cluster.len();
+
+        // Add the cluster.
+        self.values.clusters.push(new_cluster);
+
+        // At this point, we just added a new cluster, and this cluster needs to be added to the layers above.
+        if self.layers.is_empty() {
+            if self.values.clusters.len() > self.new_layer_threshold_clusters {
+                // If the layer is empty, but we have crossed the threshold to initialize the first layer,
+                // then we should initialize it.
+                self.initialize_first_layer(candidates, value_candidates, to_search, searched);
+            }
+        } else {
+            // Add the cluster to the first layer.
+            self.insert_cluster_to_layer(
+                new_cluster_ix as usize,
+                0,
+                candidates,
+                value_candidates,
+                to_search,
+                searched,
+            );
+        }
+
+        // We may also need to split this cluster additional times if it is too large.
+        if new_cluster_len > self.max_cluster_len {
+            self.split_value_cluster(
+                new_cluster_ix as usize,
+                candidates,
+                value_candidates,
+                to_search,
+                searched,
+            );
+        }
+    }
+
+    fn initialize_first_layer(
+        &mut self,
+        candidates: &mut [(LayerIndex, u32)],
+        value_candidates: &mut [(u32, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) {
+        unimplemented!()
+    }
+
+    /// Add a cluster from a lower layer to a higher layer.
+    fn insert_cluster_to_layer(
+        &mut self,
+        cluster_ix: usize,
+        layer: usize,
+        candidates: &mut [(LayerIndex, u32)],
+        value_candidates: &mut [(u32, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) {
         unimplemented!()
     }
 
@@ -297,6 +418,13 @@ where
         }
     }
 
+    /// Adds a new neighbor to the cluster if it wasn't present before and keeps the neighbors sorted.
+    fn add_neighbor(&mut self, neighbor: u32) {
+        if let Err(position) = self.neighbors.binary_search(&neighbor) {
+            self.neighbors.insert(position, neighbor);
+        }
+    }
+
     /// Returns (index, distance) to closest member (biased towards beginning of vector).
     fn closest_to(&self, key: &K) -> (usize, u32) {
         self.keys
@@ -337,6 +465,18 @@ where
         self.keys.insert(position, key);
         self.values.insert(position, value);
         self.distances.insert(position, center_distance);
+    }
+
+    /// Remove and return the furthest item from the center of the cluster.
+    fn remove_furthest(&mut self) -> (K, V) {
+        self.distances.pop();
+        (self.keys.pop().unwrap(), self.values.pop().unwrap())
+    }
+
+    /// Remove a specific item from this cluster.
+    fn remove(&mut self, item: usize) -> (K, V) {
+        self.distances.remove(item);
+        (self.keys.remove(item), self.values.remove(item))
     }
 
     /// Gets the number of items in the cluster.
