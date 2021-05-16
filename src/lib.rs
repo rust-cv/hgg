@@ -16,11 +16,16 @@ pub struct HrcCore<K, V> {
     values: HrcLayer<K, V>,
     /// The number of items stored in this HRC.
     len: usize,
+    /// Clusters with more items than this are split apart.
+    max_cluster_len: usize,
+    /// The number of value layer clusters to keep as candidates while searching the bottom layer when inserting.
+    /// Cannot be 0.
+    insertion_candidate_pool_len: usize,
 }
 
 impl<K, V> HrcCore<K, V>
 where
-    K: MetricPoint,
+    K: MetricPoint + Clone,
 {
     /// Searches down to the bottom layer, placing the best candidate items into the slice from best to worst.
     ///
@@ -63,9 +68,56 @@ where
     }
 
     /// Inserts an item into the HRC.
-    fn insert(&mut self, key: K, value: V) {
-        unimplemented!();
+    pub fn insert(
+        &mut self,
+        key: K,
+        value: V,
+        candidates: &mut [(LayerIndex, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) {
+        // The below assumes that there is at least one cluster on some level.
+        // If there are no clusters, create a cluster with the item and exit.
+        if self.values.clusters.is_empty() {
+            let mut cluster = HrcCluster::new(key.clone());
+            cluster.insert(key, value);
+            self.values.clusters.push(cluster);
+            return;
+        }
+
+        // We need to initialize to_search to only pull in the first cluster from the highest layer.
+        to_search.clear();
+        to_search.push(0);
+
+        // Go through each layer from the highest to the lowest.
+        for layer in self.layers.iter().rev() {
+            // Search this layer for the best candidates.
+            let found = layer.search(&key, candidates, to_search, searched);
+            // The values from this layer are cluster IDs from the next layer, use those to populate the to_search.
+            to_search.extend(
+                candidates[..found]
+                    .iter()
+                    .map(|&(ix, _)| *layer.get(ix).unwrap()),
+            );
+        }
+
+        // When we search the value layer, we only need to search the clusters to find the best match.
+        let mut candidates = vec![(!0, !0); self.insertion_candidate_pool_len];
+        self.values
+            .search_clusters(&key, &mut candidates, to_search, searched);
+
+        self.values.clusters[candidates[0].0 as usize].insert(key, value);
+
+        if self.values.clusters[candidates[0].0 as usize].len() > self.max_cluster_len {
+            self.split_value_cluster(candidates[0].0 as usize);
+        }
+
         self.len += 1;
+    }
+
+    /// Splits a value layer cluster.
+    fn split_value_cluster(&mut self, cluster_ix: usize) {
+        unimplemented!()
     }
 
     /// Retrieves the value from a [`LayerIndex`].
@@ -285,6 +337,11 @@ where
         self.keys.insert(position, key);
         self.values.insert(position, value);
         self.distances.insert(position, center_distance);
+    }
+
+    /// Gets the number of items in the cluster.
+    fn len(&self) -> usize {
+        self.keys.len()
     }
 }
 
