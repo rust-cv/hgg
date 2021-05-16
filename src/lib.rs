@@ -64,7 +64,8 @@ where
 
     /// Inserts an item into the HRC.
     fn insert(&mut self, key: K, value: V) {
-        unimplemented!()
+        unimplemented!();
+        self.len += 1;
     }
 
     /// Retrieves the value from a [`LayerIndex`].
@@ -114,9 +115,10 @@ where
             searched.set(cluster_ix as usize, true);
         }
 
+        let mut must_beat = !0;
+
         // Continuously attempt to search clusters.
         while let Some(cluster_ix) = to_search.pop() {
-            let mut must_beat = candidates.last().unwrap().1;
             let cluster = &self.clusters[cluster_ix as usize];
             let center_distance = cluster.center_distance(query);
             let (keys, potential) = cluster.potential_closer_items(center_distance, must_beat);
@@ -158,6 +160,56 @@ where
         }
 
         candidates.partition_point(|n| !n.0.is_empty())
+    }
+
+    /// Searches the layer, placing the best clusters into the slice from best to worst.
+    ///
+    /// `to_search` must contain the starting clusters to begin search from. `searched` and `candidates`
+    /// will get cleared and used during the search.
+    ///
+    /// Any unoccupied cluster spots will be filled with `!0`.
+    ///
+    /// Returns the number of candidates populated
+    fn search_clusters(
+        &self,
+        query: &K,
+        candidates: &mut [(u32, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) -> usize {
+        // Initialize the mutable inputs to the correct values.
+        candidates.fill((!0, !0));
+        searched.clear();
+        searched.resize(self.clusters.len(), false);
+
+        // Set all the initial clusters as searched, since they were already added to `to_search`.
+        for &cluster_ix in to_search.iter() {
+            searched.set(cluster_ix as usize, true);
+        }
+
+        let mut must_beat = !0;
+
+        // Continuously attempt to search clusters.
+        while let Some(cluster_ix) = to_search.pop() {
+            let cluster = &self.clusters[cluster_ix as usize];
+            let center_distance = cluster.center_distance(query);
+            // Check if the cluster is a new candidate.
+            if center_distance < must_beat {
+                // Add the candidate and update the must_beat.
+                add_candidate(candidates, (cluster_ix, center_distance));
+                must_beat = candidates.last().unwrap().1;
+
+                // Set neighbor clusters as searched and add them to the to_search pool only if they weren't already searched.
+                for &cluster_ix in &cluster.neighbors {
+                    if !*searched.get(cluster_ix as usize).unwrap() {
+                        searched.set(cluster_ix as usize, true);
+                        to_search.push(cluster_ix);
+                    }
+                }
+            }
+        }
+
+        candidates.partition_point(|n| n.0 != !0)
     }
 
     /// Retrieves the value from a [`LayerIndex`].
@@ -255,7 +307,7 @@ impl LayerIndex {
     }
 }
 
-fn add_candidate(candidates: &mut [(LayerIndex, u32)], c: (LayerIndex, u32)) {
+fn add_candidate<T>(candidates: &mut [(T, u32)], c: (T, u32)) {
     if c.1 < candidates.last().unwrap().1 {
         let pos = candidates.partition_point(|other| other.1 <= c.1);
         candidates[pos..].rotate_right(1);
