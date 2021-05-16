@@ -123,6 +123,13 @@ where
 
         candidates.partition_point(|n| !n.0.is_empty())
     }
+
+    /// Retrieves the item from a [`LayerIndex`].
+    fn get(&self, ix: LayerIndex) -> Option<&V> {
+        self.clusters
+            .get(ix.cluster as usize)
+            .and_then(|cluster| cluster.values.get(ix.item as usize))
+    }
 }
 
 /// Must contain at least one item. The first item is the cluster center.
