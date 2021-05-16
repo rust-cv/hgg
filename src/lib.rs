@@ -14,6 +14,8 @@ pub struct HrcCore<K, V> {
     layers: Vec<HrcLayer<K, u32>>,
     /// The bottom layer maps keys directly into values.
     values: HrcLayer<K, V>,
+    /// The number of items stored in this HRC.
+    len: usize,
 }
 
 impl<K, V> HrcCore<K, V>
@@ -34,8 +36,8 @@ where
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) -> usize {
-        // The below assumes that there is at least one cluster on some level, so exit if this is totally empty.
-        if self.is_empty() {
+        // The below assumes that there is at least one cluster on some level, so exit if there are none.
+        if self.values.clusters.is_empty() {
             candidates.fill((LayerIndex::empty(), !0));
             return 0;
         }
@@ -71,7 +73,11 @@ where
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.clusters.is_empty()
+        self.len == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 }
 
