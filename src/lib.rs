@@ -48,14 +48,40 @@ where
             return 0;
         }
 
+        // This will leave us with the candidates to search in the values layer in to_search.
+        self.search_to_layer(query, 0, candidates, to_search, searched);
+
+        // Now the to_search should contain value layer cluster IDs, so use them to search the value layer.
+        self.values.search(query, candidates, to_search, searched)
+    }
+
+    /// Searches down to the chosen layer, placing the best candidate items into the slice from best to worst.
+    ///
+    /// `to_search` and `searched` will get cleared and used during the search.
+    ///
+    /// Any unoccupied spots will be filled with an empty LayerIndex, which contains only `!0`.
+    ///
+    /// `to_search` will get populated with the candidate clusters from the previous layer.
+    ///
+    /// Returns the number of candidates populated
+    pub fn search_to_layer(
+        &self,
+        query: &K,
+        layer: usize,
+        candidates: &mut [(LayerIndex, u32)],
+        to_search: &mut Vec<u32>,
+        searched: &mut BitVec,
+    ) -> usize {
         // We need to initialize to_search to only pull in the first cluster from the highest layer.
         to_search.clear();
         to_search.push(0);
 
+        let mut found = 0;
+
         // Go through each layer from the highest to the lowest.
-        for layer in self.layers.iter().rev() {
+        for layer in self.layers[layer..].iter().rev() {
             // Search this layer for the best candidates.
-            let found = layer.search(query, candidates, to_search, searched);
+            found = layer.search(query, candidates, to_search, searched);
             // The values from this layer are cluster IDs from the next layer, use those to populate the to_search.
             to_search.extend(
                 candidates[..found]
@@ -64,8 +90,7 @@ where
             );
         }
 
-        // Now the to_search should contain value layer cluster IDs, so use them to search the value layer.
-        self.values.search(query, candidates, to_search, searched)
+        found
     }
 
     /// Inserts an item into the HRC.
@@ -253,6 +278,15 @@ where
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
+        // The below assumes that there is at least one cluster in the layer already.
+        // If there are no clusters, create a cluster and exit.
+        if self.layers[layer].clusters.is_empty() {
+            let mut cluster = HrcCluster::new(key.clone());
+            cluster.insert(key, cluster_ix);
+            self.layers[layer].clusters.push(cluster);
+            return;
+        }
+
         // We need to initialize to_search to only pull in the first cluster from the highest layer.
         to_search.clear();
         to_search.push(0);
@@ -300,7 +334,7 @@ where
         let (key, value) = self.layers[layer].clusters[cluster_ix].remove_furthest();
 
         // Now we perform a standard search on the cluster to find the nearest neighbors to this key.
-        let found = self.search(&key, candidates, to_search, searched);
+        let found = self.search_to_layer(&key, layer, candidates, to_search, searched);
 
         // Create a new cluster and add the key and value to it.
         let new_cluster_ix = self.layers[layer].clusters.len() as u32;

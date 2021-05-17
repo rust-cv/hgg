@@ -166,4 +166,269 @@ fn test_cluster_split() {
             new_layer_threshold_clusters: 2,
         }
     );
+
+    hrc.insert(
+        Hamming(0b1100_0000),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b0011_0000),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b0011_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1100_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1110_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1010_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1010_1011),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1010_1010),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    assert_eq!(
+        hrc,
+        HrcCore {
+            layers: vec![HrcLayer {
+                clusters: vec![
+                    HrcCluster {
+                        key: Hamming(0),
+                        neighbors: vec![1],
+                        keys: vec![Hamming(0), Hamming(240)],
+                        values: vec![0, 2],
+                        distances: vec![0, 4],
+                    },
+                    HrcCluster {
+                        key: Hamming(255),
+                        neighbors: vec![0],
+                        keys: vec![Hamming(255), Hamming(207), Hamming(171)],
+                        values: vec![1, 3, 4],
+                        distances: vec![0, 2, 3],
+                    },
+                ],
+            }],
+            values: HrcLayer {
+                clusters: vec![
+                    HrcCluster {
+                        key: Hamming(0),
+                        neighbors: vec![1, 2, 2, 3],
+                        keys: vec![Hamming(0), Hamming(192)],
+                        values: vec![(), ()],
+                        distances: vec![0, 2],
+                    },
+                    HrcCluster {
+                        key: Hamming(255),
+                        neighbors: vec![0, 2, 3, 3, 4],
+                        keys: vec![Hamming(255), Hamming(239), Hamming(63)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 2],
+                    },
+                    HrcCluster {
+                        key: Hamming(240),
+                        neighbors: vec![0, 1, 0, 3, 4],
+                        keys: vec![Hamming(240), Hamming(48)],
+                        values: vec![(), ()],
+                        distances: vec![0, 2],
+                    },
+                    HrcCluster {
+                        key: Hamming(207),
+                        neighbors: vec![1, 1, 0, 2, 4, 4],
+                        keys: vec![Hamming(207), Hamming(15)],
+                        values: vec![(), ()],
+                        distances: vec![0, 2],
+                    },
+                    HrcCluster {
+                        key: Hamming(171),
+                        neighbors: vec![3, 1, 3, 2],
+                        keys: vec![Hamming(171), Hamming(175), Hamming(170)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 1],
+                    },
+                ],
+            },
+            len: 11,
+            max_cluster_len: 3,
+            new_layer_threshold_clusters: 2,
+        }
+    );
+
+    hrc.insert(
+        Hamming(0b1110_1110),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1110_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1110_0111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1110_0110),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    assert_eq!(
+        hrc,
+        HrcCore {
+            layers: vec![
+                HrcLayer {
+                    clusters: vec![
+                        HrcCluster {
+                            key: Hamming(0),
+                            neighbors: vec![1, 2],
+                            keys: vec![Hamming(0), Hamming(240)],
+                            values: vec![0, 2],
+                            distances: vec![0, 4]
+                        },
+                        HrcCluster {
+                            key: Hamming(255),
+                            neighbors: vec![0, 2],
+                            keys: vec![Hamming(255), Hamming(207), Hamming(238)],
+                            values: vec![1, 3, 5],
+                            distances: vec![0, 2, 2]
+                        },
+                        HrcCluster {
+                            key: Hamming(171),
+                            neighbors: vec![1, 0],
+                            keys: vec![Hamming(171)],
+                            values: vec![4],
+                            distances: vec![0]
+                        }
+                    ]
+                },
+                HrcLayer {
+                    clusters: vec![HrcCluster {
+                        key: Hamming(0),
+                        neighbors: vec![],
+                        keys: vec![Hamming(0), Hamming(171), Hamming(255)],
+                        values: vec![0, 2, 1],
+                        distances: vec![0, 5, 8]
+                    }]
+                }
+            ],
+            values: HrcLayer {
+                clusters: vec![
+                    HrcCluster {
+                        key: Hamming(0),
+                        neighbors: vec![1, 2, 2, 3],
+                        keys: vec![Hamming(0), Hamming(192)],
+                        values: vec![(), ()],
+                        distances: vec![0, 2]
+                    },
+                    HrcCluster {
+                        key: Hamming(255),
+                        neighbors: vec![0, 2, 3, 3, 4, 5],
+                        keys: vec![Hamming(255), Hamming(239), Hamming(63)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 2]
+                    },
+                    HrcCluster {
+                        key: Hamming(240),
+                        neighbors: vec![0, 1, 0, 3, 4, 5],
+                        keys: vec![Hamming(240), Hamming(48)],
+                        values: vec![(), ()],
+                        distances: vec![0, 2]
+                    },
+                    HrcCluster {
+                        key: Hamming(207),
+                        neighbors: vec![1, 1, 0, 2, 4, 4, 5],
+                        keys: vec![Hamming(207), Hamming(239), Hamming(15)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 2]
+                    },
+                    HrcCluster {
+                        key: Hamming(171),
+                        neighbors: vec![3, 1, 3, 2, 5],
+                        keys: vec![Hamming(171), Hamming(175), Hamming(170)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 1]
+                    },
+                    HrcCluster {
+                        key: Hamming(238),
+                        neighbors: vec![1, 3, 4, 2],
+                        keys: vec![Hamming(238), Hamming(230), Hamming(231)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 1, 2]
+                    }
+                ]
+            },
+            len: 15,
+            max_cluster_len: 3,
+            new_layer_threshold_clusters: 2
+        }
+    );
 }
