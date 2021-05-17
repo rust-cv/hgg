@@ -1,4 +1,4 @@
-use crate::{HrcCluster, HrcLayer, LayerIndex};
+use crate::{HrcCluster, HrcCore, HrcLayer, LayerIndex};
 use alloc::vec;
 use bitvec::vec::BitVec;
 use space::Hamming;
@@ -87,4 +87,83 @@ fn test_layer_search() {
         ]
     );
     assert_eq!(*layer.get(candidates[0].0).unwrap(), "d");
+}
+
+#[test]
+fn test_cluster_split() {
+    let mut hrc: HrcCore<Hamming<u8>, ()> = HrcCore {
+        layers: vec![],
+        values: HrcLayer { clusters: vec![] },
+        len: 0,
+        max_cluster_len: 3,
+        new_layer_threshold_clusters: 2,
+    };
+
+    let mut candidates = [(LayerIndex::empty(), !0); 4];
+    let mut value_candidates = [(!0, !0); 4];
+    let mut to_search = vec![];
+    let mut searched = BitVec::new();
+    hrc.insert(
+        Hamming(0b0000_0000),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1111_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b0000_1111),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    hrc.insert(
+        Hamming(0b1111_0000),
+        (),
+        &mut candidates,
+        &mut value_candidates,
+        &mut to_search,
+        &mut searched,
+    );
+
+    assert_eq!(
+        hrc,
+        HrcCore {
+            layers: vec![],
+            values: HrcLayer {
+                clusters: vec![
+                    HrcCluster {
+                        key: Hamming(0),
+                        neighbors: vec![1],
+                        keys: vec![Hamming(0), Hamming(15), Hamming(240)],
+                        values: vec![(), (), ()],
+                        distances: vec![0, 4, 4],
+                    },
+                    HrcCluster {
+                        key: Hamming(255),
+                        neighbors: vec![0],
+                        keys: vec![Hamming(255)],
+                        values: vec![()],
+                        distances: vec![0],
+                    },
+                ],
+            },
+            len: 3,
+            max_cluster_len: 3,
+            new_layer_threshold_clusters: 2,
+        }
+    );
 }
