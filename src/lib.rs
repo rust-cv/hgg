@@ -12,10 +12,7 @@ use space::MetricPoint;
 
 #[derive(Clone, Debug)]
 pub struct Stats {
-    len: usize,
-    layer_num_clusters: Vec<usize>,
-    layer_average_cluster_neighbors: Vec<f64>,
-    layer_max_cluster_neighbors: Vec<usize>,
+    pub layer_cluster_neigbors_histogram: Vec<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,51 +55,53 @@ impl<K, V> HrcCore<K, V> {
         self.len
     }
 
+    /// Gets a vector over the layers (`Vec<Vec<usize>>`).
+    /// Each layer is a vector of clusters (`Vec<usize>`), where each `usize` corresponds
+    /// to a particular cluster's number of neighbors.
+    pub fn layer_cluster_neighbors(&self) -> Vec<Vec<usize>> {
+        Some(
+            self.values
+                .clusters
+                .iter()
+                .map(|cluster| cluster.neighbors.len())
+                .collect(),
+        )
+        .into_iter()
+        .chain(self.layers.iter().map(|layer| {
+            layer
+                .clusters
+                .iter()
+                .map(|cluster| cluster.neighbors.len())
+                .collect()
+        }))
+        .collect()
+    }
+
+    /// Gets a vector over the layers (`Vec<Vec<(usize, usize)>>`).
+    /// Each layer is a histogram over cluster neighbor counts (`Vec<(usize, usize)>`).
+    /// The histogram is sorted from the lowest to highest neighbor count.
+    /// Each neighbor count has an associated number of times it occurs in the layer.
+    /// The tuple is formatted as `(neighbor count, occurences)`.
+    pub fn layer_cluster_neighbors_histogram(&self) -> Vec<Vec<(usize, usize)>> {
+        let layer_cluster_neighbors = self.layer_cluster_neighbors();
+        layer_cluster_neighbors
+            .into_iter()
+            .map(|layer| {
+                let mut histogram = vec![];
+                for count in layer {
+                    match histogram.binary_search_by_key(&count, |&(count, _)| count) {
+                        Ok(pos) => histogram[pos].1 += 1,
+                        Err(pos) => histogram.insert(pos, (count, 1)),
+                    }
+                }
+                histogram
+            })
+            .collect()
+    }
+
     pub fn stats(&self) -> Stats {
         Stats {
-            len: self.len,
-            layer_num_clusters: Some(self.values.clusters.len())
-                .into_iter()
-                .chain(self.layers.iter().map(|layer| layer.clusters.len()))
-                .collect(),
-            layer_average_cluster_neighbors: Some(
-                self.values
-                    .clusters
-                    .iter()
-                    .map(|cluster| cluster.neighbors.len() as f64)
-                    .sum::<f64>()
-                    / self.values.clusters.len() as f64,
-            )
-            .into_iter()
-            .chain(self.layers.iter().map(|layer| {
-                layer
-                    .clusters
-                    .iter()
-                    .map(|cluster| cluster.neighbors.len() as f64)
-                    .sum::<f64>()
-                    / layer.clusters.len() as f64
-            }))
-            .collect(),
-            layer_max_cluster_neighbors: Some(if self.is_empty() {
-                0
-            } else {
-                self.values
-                    .clusters
-                    .iter()
-                    .map(|cluster| cluster.neighbors.len())
-                    .max()
-                    .unwrap()
-            })
-            .into_iter()
-            .chain(self.layers.iter().map(|layer| {
-                layer
-                    .clusters
-                    .iter()
-                    .map(|cluster| cluster.neighbors.len())
-                    .max()
-                    .unwrap()
-            }))
-            .collect(),
+            layer_cluster_neigbors_histogram: self.layer_cluster_neighbors_histogram(),
         }
     }
 }
