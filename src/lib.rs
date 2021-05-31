@@ -14,6 +14,8 @@ use space::MetricPoint;
 pub struct Stats {
     len: usize,
     layer_num_clusters: Vec<usize>,
+    layer_average_cluster_neighbors: Vec<f64>,
+    layer_max_cluster_neighbors: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +65,44 @@ impl<K, V> HrcCore<K, V> {
                 .into_iter()
                 .chain(self.layers.iter().map(|layer| layer.clusters.len()))
                 .collect(),
+            layer_average_cluster_neighbors: Some(
+                self.values
+                    .clusters
+                    .iter()
+                    .map(|cluster| cluster.neighbors.len() as f64)
+                    .sum::<f64>()
+                    / self.values.clusters.len() as f64,
+            )
+            .into_iter()
+            .chain(self.layers.iter().map(|layer| {
+                layer
+                    .clusters
+                    .iter()
+                    .map(|cluster| cluster.neighbors.len() as f64)
+                    .sum::<f64>()
+                    / layer.clusters.len() as f64
+            }))
+            .collect(),
+            layer_max_cluster_neighbors: Some(if self.is_empty() {
+                0
+            } else {
+                self.values
+                    .clusters
+                    .iter()
+                    .map(|cluster| cluster.neighbors.len())
+                    .max()
+                    .unwrap()
+            })
+            .into_iter()
+            .chain(self.layers.iter().map(|layer| {
+                layer
+                    .clusters
+                    .iter()
+                    .map(|cluster| cluster.neighbors.len())
+                    .max()
+                    .unwrap()
+            }))
+            .collect(),
         }
     }
 }

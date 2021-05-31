@@ -5,7 +5,7 @@ use alloc::{vec, vec::Vec};
 use bitvec::vec::BitVec;
 use itertools::Itertools;
 use rand::{Rng, SeedableRng};
-use space::Hamming;
+use space::{Bits256, Hamming};
 use std::eprintln;
 
 fn test_layer() -> HrcLayer<Hamming<u8>, &'static str> {
@@ -343,14 +343,14 @@ fn test_cluster_split() {
 
 #[test]
 fn random_insertion_stats() {
-    let mut hrc: HrcCore<Hamming<u64>, ()> = HrcCore {
+    let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore {
         max_cluster_len: 5,
         new_layer_threshold_clusters: 5,
         ..HrcCore::new()
     };
 
-    let mut candidates = [(LayerIndex::empty(), !0); 2048];
-    let mut cluster_candidates = [(!0, !0); 64];
+    let mut candidates = [(LayerIndex::empty(), !0); 4096];
+    let mut cluster_candidates = [(!0, !0); 1];
     let mut to_search = vec![];
     let mut searched = BitVec::new();
 
@@ -358,8 +358,9 @@ fn random_insertion_stats() {
     let rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
     // Generate random keys.
-    let keys: Vec<Hamming<u64>> = rng
-        .sample_iter(rand::distributions::Standard)
+    let keys: Vec<Hamming<Bits256>> = rng
+        .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
+        .map(Bits256)
         .map(Hamming)
         .take(1 << 14)
         .collect();
