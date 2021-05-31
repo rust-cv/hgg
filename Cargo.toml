@@ -8,3 +8,8 @@ resolver = "2"
 space = { version = "0.11.0", default-features = false }
 bitvec = { version = "0.22.3", default-features = false, features = ["alloc"] }
 itertools = { version = "0.10.0", default-features = false }
+
+[dev-dependencies]
+rand = "0.8.3"
+rand_xoshiro = "0.6.0"
+itertools = { version = "0.10.0" }

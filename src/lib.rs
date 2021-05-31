@@ -10,7 +10,14 @@ use bitvec::vec::BitVec;
 use itertools::Itertools;
 use space::MetricPoint;
 
+#[derive(Clone, Debug)]
+pub struct Stats {
+    len: usize,
+    layer_num_clusters: Vec<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct HrcCore<K, V> {
     /// Each layer maps keys (representing the cluster center) to the index in the next layer (as a u32).
     layers: Vec<HrcLayer<K, u32>>,
@@ -19,9 +26,45 @@ pub struct HrcCore<K, V> {
     /// The number of items stored in this HRC.
     len: usize,
     /// Clusters with more items than this are split apart.
-    max_cluster_len: usize,
+    pub max_cluster_len: usize,
     /// Number of clusters before a new layer is created.
-    new_layer_threshold_clusters: usize,
+    pub new_layer_threshold_clusters: usize,
+}
+
+impl<K, V> HrcCore<K, V> {
+    /// Creates a new [`HrcCore`]. It will be empty and begin with default settings.
+    pub fn new() -> Self {
+        Self {
+            layers: Default::default(),
+            values: Default::default(),
+            len: 0,
+            max_cluster_len: 1024,
+            new_layer_threshold_clusters: 1024,
+        }
+    }
+
+    /// Retrieves the value from a [`LayerIndex`].
+    pub fn get(&self, ix: LayerIndex) -> Option<(&K, &V)> {
+        self.values.get(ix)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn stats(&self) -> Stats {
+        Stats {
+            len: self.len,
+            layer_num_clusters: Some(self.values.clusters.len())
+                .into_iter()
+                .chain(self.layers.iter().map(|layer| layer.clusters.len()))
+                .collect(),
+        }
+    }
 }
 
 impl<K, V> HrcCore<K, V>
@@ -86,7 +129,7 @@ where
             to_search.extend(
                 candidates[..found]
                     .iter()
-                    .map(|&(ix, _)| *layer.get(ix).unwrap()),
+                    .map(|&(ix, _)| *layer.get(ix).unwrap().1),
             );
         }
 
@@ -94,12 +137,13 @@ where
     }
 
     /// Inserts an item into the HRC.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         key: K,
         value: V,
         candidates: &mut [(LayerIndex, u32)],
-        value_candidates: &mut [(u32, u32)],
+        cluster_candidates: &mut [(u32, u32)],
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
@@ -124,21 +168,23 @@ where
             to_search.extend(
                 candidates[..found]
                     .iter()
-                    .map(|&(ix, _)| *layer.get(ix).unwrap()),
+                    .map(|&(ix, _)| *layer.get(ix).unwrap().1),
             );
         }
 
         // When we search the value layer, we only need to search the clusters to find the best match.
         self.values
-            .search_clusters(&key, value_candidates, to_search, searched);
+            .search_clusters(&key, cluster_candidates, to_search, searched);
 
-        self.values.clusters[value_candidates[0].0 as usize].insert(key, value);
+        // Insert it into the best cluster.
+        self.values.clusters[cluster_candidates[0].0 as usize].insert(key, value);
 
-        if self.values.clusters[value_candidates[0].0 as usize].len() > self.max_cluster_len {
+        // If the cluster has gotten to large we must split it.
+        if self.values.clusters[cluster_candidates[0].0 as usize].len() > self.max_cluster_len {
             self.split_value_cluster(
-                value_candidates[0].0 as usize,
+                cluster_candidates[0].0 as usize,
                 candidates,
-                value_candidates,
+                cluster_candidates,
                 to_search,
                 searched,
             );
@@ -152,7 +198,7 @@ where
         &mut self,
         cluster_ix: usize,
         candidates: &mut [(LayerIndex, u32)],
-        value_candidates: &mut [(u32, u32)],
+        cluster_candidates: &mut [(u32, u32)],
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
@@ -162,6 +208,11 @@ where
         // Now we perform a standard search on the cluster to find the nearest neighbors to this key.
         let found = self.search(&key, candidates, to_search, searched);
 
+        // Sort the candidates such that greater indices appear sooner in the candidates.
+        // This is necessary to ensure we don't disturb indicies from other items in the candidates.
+        // This sort must be stable to preserve the order of clusters so the dedup below still works.
+        candidates[..found].sort_by_key(|(LayerIndex { item, .. }, _)| core::cmp::Reverse(*item));
+
         // Create a new cluster and add the key and value to it.
         let new_cluster_ix = self.values.clusters.len() as u32;
         let mut new_cluster = HrcCluster::new(key.clone());
@@ -170,7 +221,7 @@ where
         // Check each of the found items in reverse.
         // Going in reverse is necessary to make sure when we remove items we don't disturb indicies
         // from other items we need to retrieve next.
-        for &(layer_ix, distance) in candidates[..found].iter().rev() {
+        for &(layer_ix, distance) in candidates[..found].iter() {
             // Get the cluster the item belongs to.
             let other_cluster = &mut self.values.clusters[layer_ix.cluster as usize];
             // Get the distance of the item to its own cluster.
@@ -196,10 +247,10 @@ where
         // Search clusters on the values to find the closest clusters.
         let found = self
             .values
-            .search_clusters(&key, value_candidates, to_search, searched);
+            .search_clusters(&key, cluster_candidates, to_search, searched);
 
         // Iterate through the closest clusters.
-        for &(other_cluster_ix, _) in &value_candidates[..found] {
+        for &(other_cluster_ix, _) in &cluster_candidates[..found] {
             // Connect the two clusters together.
             // These should not contain each other.
             self.values.clusters[other_cluster_ix as usize]
@@ -218,7 +269,7 @@ where
             if self.values.clusters.len() > self.new_layer_threshold_clusters {
                 // If the layer is empty, but we have crossed the threshold to initialize the first layer,
                 // then we should initialize it.
-                self.initialize_first_layer(candidates, value_candidates, to_search, searched);
+                self.initialize_first_layer(candidates, cluster_candidates, to_search, searched);
             }
         } else {
             // Add the cluster to the first layer.
@@ -227,7 +278,7 @@ where
                 new_cluster_ix,
                 0,
                 candidates,
-                value_candidates,
+                cluster_candidates,
                 to_search,
                 searched,
             );
@@ -238,7 +289,7 @@ where
             self.split_value_cluster(
                 new_cluster_ix as usize,
                 candidates,
-                value_candidates,
+                cluster_candidates,
                 to_search,
                 searched,
             );
@@ -248,7 +299,7 @@ where
     fn initialize_first_layer(
         &mut self,
         candidates: &mut [(LayerIndex, u32)],
-        value_candidates: &mut [(u32, u32)],
+        cluster_candidates: &mut [(u32, u32)],
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
@@ -259,7 +310,7 @@ where
                 cluster_ix as u32,
                 0,
                 candidates,
-                value_candidates,
+                cluster_candidates,
                 to_search,
                 searched,
             );
@@ -274,7 +325,7 @@ where
         cluster_ix: u32,
         layer: usize,
         candidates: &mut [(LayerIndex, u32)],
-        value_candidates: &mut [(u32, u32)],
+        cluster_candidates: &mut [(u32, u32)],
         to_search: &mut Vec<u32>,
         searched: &mut BitVec,
     ) {
@@ -299,22 +350,23 @@ where
             to_search.extend(
                 candidates[..found]
                     .iter()
-                    .map(|&(ix, _)| *layer.get(ix).unwrap()),
+                    .map(|&(ix, _)| *layer.get(ix).unwrap().1),
             );
         }
 
-        // When we search the value layer, we only need to search the clusters to find the best match.
-        self.layers[layer].search_clusters(&key, value_candidates, to_search, searched);
+        // When we search the layer, we only need to search the clusters to find the best match.
+        self.layers[layer].search_clusters(&key, cluster_candidates, to_search, searched);
 
-        self.layers[layer].clusters[value_candidates[0].0 as usize].insert(key, cluster_ix);
+        self.layers[layer].clusters[cluster_candidates[0].0 as usize].insert(key, cluster_ix);
 
-        if self.layers[layer].clusters[value_candidates[0].0 as usize].len() > self.max_cluster_len
+        if self.layers[layer].clusters[cluster_candidates[0].0 as usize].len()
+            > self.max_cluster_len
         {
             self.split_layer_cluster(
-                value_candidates[0].0 as usize,
+                cluster_candidates[0].0 as usize,
                 layer,
                 candidates,
-                value_candidates,
+                cluster_candidates,
                 to_search,
                 searched,
             );
@@ -336,15 +388,18 @@ where
         // Now we perform a standard search on the cluster to find the nearest neighbors to this key.
         let found = self.search_to_layer(&key, layer, candidates, to_search, searched);
 
+        // Sort the candidates such that greater indices appear sooner in the candidates.
+        // This is necessary to ensure we don't disturb indicies from other items in the candidates.
+        // This sort must be stable to preserve the order of clusters so the dedup below still works.
+        candidates[..found].sort_by_key(|(LayerIndex { item, .. }, _)| core::cmp::Reverse(*item));
+
         // Create a new cluster and add the key and value to it.
         let new_cluster_ix = self.layers[layer].clusters.len() as u32;
         let mut new_cluster = HrcCluster::new(key.clone());
         new_cluster.insert(key.clone(), value);
 
-        // Check each of the found items in reverse.
-        // Going in reverse is necessary to make sure when we remove items we don't disturb indicies
-        // from other items we need to retrieve next.
-        for &(layer_ix, distance) in candidates[..found].iter().rev() {
+        // Check each of the found items and insert it if it's relevant.
+        for &(layer_ix, distance) in candidates[..found].iter() {
             // Get the cluster the item belongs to.
             let other_cluster = &mut self.layers[layer].clusters[layer_ix.cluster as usize];
             // Get the distance of the item to its own cluster.
@@ -445,24 +500,36 @@ where
             );
         }
     }
+}
 
-    /// Retrieves the value from a [`LayerIndex`].
-    fn get(&self, ix: LayerIndex) -> Option<&V> {
-        self.values.get(ix)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
+impl<K, V> Default for HrcCore<K, V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HrcLayer<K, V> {
     clusters: Vec<HrcCluster<K, V>>,
+}
+
+impl<K, V> HrcLayer<K, V> {
+    /// Creates an empty [`HrcLayer`].
+    fn new() -> Self {
+        Self {
+            clusters: Default::default(),
+        }
+    }
+
+    /// Retrieves the value from a [`LayerIndex`].
+    fn get(&self, ix: LayerIndex) -> Option<(&K, &V)> {
+        self.clusters.get(ix.cluster as usize).and_then(|cluster| {
+            cluster
+                .keys
+                .get(ix.item as usize)
+                .zip(cluster.values.get(ix.item as usize))
+        })
+    }
 }
 
 impl<K, V> HrcLayer<K, V>
@@ -590,12 +657,11 @@ where
 
         candidates.partition_point(|n| n.0 != !0)
     }
+}
 
-    /// Retrieves the value from a [`LayerIndex`].
-    fn get(&self, ix: LayerIndex) -> Option<&V> {
-        self.clusters
-            .get(ix.cluster as usize)
-            .and_then(|cluster| cluster.values.get(ix.item as usize))
+impl<K, V> Default for HrcLayer<K, V> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

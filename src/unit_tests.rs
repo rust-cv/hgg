@@ -1,7 +1,12 @@
+extern crate std;
+
 use crate::{HrcCluster, HrcCore, HrcLayer, LayerIndex};
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 use bitvec::vec::BitVec;
+use itertools::Itertools;
+use rand::{Rng, SeedableRng};
 use space::Hamming;
+use std::eprintln;
 
 fn test_layer() -> HrcLayer<Hamming<u8>, &'static str> {
     let mut first_cluster = HrcCluster::new(Hamming(0b1101));
@@ -86,58 +91,36 @@ fn test_layer_search() {
             )
         ]
     );
-    assert_eq!(*layer.get(candidates[0].0).unwrap(), "d");
+    assert_eq!(
+        layer.get(candidates[0].0).unwrap(),
+        (&Hamming(0b0101), &"d")
+    );
 }
 
 #[test]
 fn test_cluster_split() {
     let mut hrc: HrcCore<Hamming<u8>, ()> = HrcCore {
-        layers: vec![],
-        values: HrcLayer { clusters: vec![] },
-        len: 0,
         max_cluster_len: 3,
         new_layer_threshold_clusters: 2,
+        ..HrcCore::new()
     };
 
     let mut candidates = [(LayerIndex::empty(), !0); 4];
-    let mut value_candidates = [(!0, !0); 4];
+    let mut cluster_candidates = [(!0, !0); 4];
     let mut to_search = vec![];
     let mut searched = BitVec::new();
-    hrc.insert(
-        Hamming(0b0000_0000),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
 
-    hrc.insert(
-        Hamming(0b1111_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b0000_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1111_0000),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
+    // Insert a series of keys.
+    for &key in &[0b0000_0000, 0b1111_1111, 0b0000_1111, 0b1111_0000] {
+        hrc.insert(
+            Hamming(key),
+            (),
+            &mut candidates,
+            &mut cluster_candidates,
+            &mut to_search,
+            &mut searched,
+        );
+    }
 
     assert_eq!(
         hrc,
@@ -167,77 +150,26 @@ fn test_cluster_split() {
         }
     );
 
-    hrc.insert(
-        Hamming(0b1100_0000),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b0011_0000),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b0011_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1100_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1110_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1010_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1010_1011),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1010_1010),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
+    // Insert a series of keys.
+    for &key in &[
+        0b1100_0000,
+        0b0011_0000,
+        0b0011_1111,
+        0b1100_1111,
+        0b1110_1111,
+        0b1010_1111,
+        0b1010_1011,
+        0b1010_1010,
+    ] {
+        hrc.insert(
+            Hamming(key),
+            (),
+            &mut candidates,
+            &mut cluster_candidates,
+            &mut to_search,
+            &mut searched,
+        );
+    }
 
     assert_eq!(
         hrc,
@@ -249,97 +181,73 @@ fn test_cluster_split() {
                         neighbors: vec![1],
                         keys: vec![Hamming(0), Hamming(240)],
                         values: vec![0, 2],
-                        distances: vec![0, 4],
+                        distances: vec![0, 4]
                     },
                     HrcCluster {
                         key: Hamming(255),
                         neighbors: vec![0],
                         keys: vec![Hamming(255), Hamming(207), Hamming(171)],
                         values: vec![1, 3, 4],
-                        distances: vec![0, 2, 3],
-                    },
-                ],
+                        distances: vec![0, 2, 3]
+                    }
+                ]
             }],
             values: HrcLayer {
                 clusters: vec![
                     HrcCluster {
                         key: Hamming(0),
-                        neighbors: vec![1, 2, 2, 3],
+                        neighbors: vec![1, 2, 3, 4],
                         keys: vec![Hamming(0), Hamming(192)],
                         values: vec![(), ()],
-                        distances: vec![0, 2],
+                        distances: vec![0, 2]
                     },
                     HrcCluster {
                         key: Hamming(255),
                         neighbors: vec![0, 2, 3, 3, 4],
                         keys: vec![Hamming(255), Hamming(239), Hamming(63)],
                         values: vec![(), (), ()],
-                        distances: vec![0, 1, 2],
+                        distances: vec![0, 1, 2]
                     },
                     HrcCluster {
                         key: Hamming(240),
-                        neighbors: vec![0, 1, 0, 3, 4],
+                        neighbors: vec![1, 0, 3],
                         keys: vec![Hamming(240), Hamming(48)],
                         values: vec![(), ()],
-                        distances: vec![0, 2],
+                        distances: vec![0, 2]
                     },
                     HrcCluster {
                         key: Hamming(207),
-                        neighbors: vec![1, 1, 0, 2, 4, 4],
+                        neighbors: vec![1, 1, 2, 0, 4, 4],
                         keys: vec![Hamming(207), Hamming(15)],
                         values: vec![(), ()],
-                        distances: vec![0, 2],
+                        distances: vec![0, 2]
                     },
                     HrcCluster {
                         key: Hamming(171),
-                        neighbors: vec![3, 1, 3, 2],
+                        neighbors: vec![3, 1, 3, 0],
                         keys: vec![Hamming(171), Hamming(175), Hamming(170)],
                         values: vec![(), (), ()],
-                        distances: vec![0, 1, 1],
-                    },
-                ],
+                        distances: vec![0, 1, 1]
+                    }
+                ]
             },
             len: 11,
             max_cluster_len: 3,
-            new_layer_threshold_clusters: 2,
+            new_layer_threshold_clusters: 2
         }
     );
 
-    hrc.insert(
-        Hamming(0b1110_1110),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1110_1111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1110_0111),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
-
-    hrc.insert(
-        Hamming(0b1110_0110),
-        (),
-        &mut candidates,
-        &mut value_candidates,
-        &mut to_search,
-        &mut searched,
-    );
+    // Insert a series of keys.
+    for &key in &[0b1110_1110, 0b1110_1111, 0b1110_0111, 0b1110_0110] {
+        hrc.insert(
+            Hamming(key),
+            (),
+            &mut candidates,
+            &mut cluster_candidates,
+            &mut to_search,
+            &mut searched,
+        );
+    }
 
     assert_eq!(
         hrc,
@@ -384,7 +292,7 @@ fn test_cluster_split() {
                 clusters: vec![
                     HrcCluster {
                         key: Hamming(0),
-                        neighbors: vec![1, 2, 2, 3],
+                        neighbors: vec![1, 2, 3, 4],
                         keys: vec![Hamming(0), Hamming(192)],
                         values: vec![(), ()],
                         distances: vec![0, 2]
@@ -398,28 +306,28 @@ fn test_cluster_split() {
                     },
                     HrcCluster {
                         key: Hamming(240),
-                        neighbors: vec![0, 1, 0, 3, 4, 5],
+                        neighbors: vec![1, 0, 3],
                         keys: vec![Hamming(240), Hamming(48)],
                         values: vec![(), ()],
                         distances: vec![0, 2]
                     },
                     HrcCluster {
                         key: Hamming(207),
-                        neighbors: vec![1, 1, 0, 2, 4, 4, 5],
+                        neighbors: vec![1, 1, 2, 0, 4, 4, 5],
                         keys: vec![Hamming(207), Hamming(239), Hamming(15)],
                         values: vec![(), (), ()],
                         distances: vec![0, 1, 2]
                     },
                     HrcCluster {
                         key: Hamming(171),
-                        neighbors: vec![3, 1, 3, 2, 5],
+                        neighbors: vec![3, 1, 3, 0, 5, 5],
                         keys: vec![Hamming(171), Hamming(175), Hamming(170)],
                         values: vec![(), (), ()],
                         distances: vec![0, 1, 1]
                     },
                     HrcCluster {
                         key: Hamming(238),
-                        neighbors: vec![1, 3, 4, 2],
+                        neighbors: vec![1, 3, 4, 4],
                         keys: vec![Hamming(238), Hamming(230), Hamming(231)],
                         values: vec![(), (), ()],
                         distances: vec![0, 1, 2]
@@ -431,4 +339,71 @@ fn test_cluster_split() {
             new_layer_threshold_clusters: 2
         }
     );
+}
+
+#[test]
+fn random_insertion_stats() {
+    let mut hrc: HrcCore<Hamming<u64>, ()> = HrcCore {
+        max_cluster_len: 5,
+        new_layer_threshold_clusters: 5,
+        ..HrcCore::new()
+    };
+
+    let mut candidates = [(LayerIndex::empty(), !0); 2048];
+    let mut cluster_candidates = [(!0, !0); 64];
+    let mut to_search = vec![];
+    let mut searched = BitVec::new();
+
+    // Use a PRNG with good statistical properties for generating 64-bit numbers.
+    let rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
+
+    // Generate random keys.
+    let keys: Vec<Hamming<u64>> = rng
+        .sample_iter(rand::distributions::Standard)
+        .map(Hamming)
+        .take(1 << 14)
+        .collect();
+
+    // Insert keys into HRC.
+    for (ix, &key) in keys.iter().enumerate() {
+        if ix % 1000 == 0 {
+            eprintln!("Inserting {}", ix);
+            eprintln!("Stats: {:?}", hrc.stats());
+        }
+        hrc.insert(
+            key,
+            (),
+            &mut candidates,
+            &mut cluster_candidates,
+            &mut to_search,
+            &mut searched,
+        );
+    }
+
+    for (ix, key) in keys.iter().enumerate() {
+        if ix % 100 == 0 {
+            eprintln!("Searching {}", ix);
+        }
+        // Search each key.
+        hrc.search(key, &mut candidates, &mut to_search, &mut searched);
+        // Make sure that the best result is this key.
+        assert_eq!(hrc.get(candidates[0].0).unwrap().0, key);
+    }
+
+    for layer in &hrc.layers {
+        // Make sure that all the u32 index values in this layer are unique across the whole layer (or there is a bug).
+        assert_eq!(
+            layer
+                .clusters
+                .iter()
+                .flat_map(|cluster| cluster.values.iter().copied())
+                .unique()
+                .count(),
+            layer
+                .clusters
+                .iter()
+                .flat_map(|cluster| cluster.values.iter().copied())
+                .count()
+        );
+    }
 }
