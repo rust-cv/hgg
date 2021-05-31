@@ -691,16 +691,6 @@ where
         }
     }
 
-    /// Returns (index, distance) to closest member (biased towards beginning of vector).
-    fn closest_to(&self, key: &K) -> (usize, u32) {
-        self.keys
-            .iter()
-            .map(|ck| key.distance(ck))
-            .enumerate()
-            .reduce(|(aix, ad), (bix, bd)| if bd < ad { (bix, bd) } else { (aix, ad) })
-            .unwrap()
-    }
-
     /// Returns the slice of keys and values that could beat a given distance and a bool indicating if the
     /// cluster radius distance could have encompassed a relevant point.
     fn potential_closer_items(&self, center_distance: u32, must_beat: u32) -> (&[K], bool) {
