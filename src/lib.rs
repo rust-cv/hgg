@@ -787,14 +787,14 @@ pub struct LayerIndex {
 }
 
 impl LayerIndex {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         LayerIndex {
             cluster: !0,
             item: !0,
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.cluster == !0
     }
 }
