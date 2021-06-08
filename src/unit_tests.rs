@@ -96,11 +96,9 @@ fn test_layer_search() {
 
 #[test]
 fn test_cluster_split() {
-    let mut hrc: HrcCore<Hamming<u8>, ()> = HrcCore {
-        max_cluster_len: 3,
-        new_layer_threshold_clusters: 2,
-        ..HrcCore::new()
-    };
+    let mut hrc: HrcCore<Hamming<u8>, ()> = HrcCore::new()
+        .max_cluster_len(3)
+        .new_layer_threshold_clusters(2);
 
     let mut candidates = [(LayerIndex::empty(), !0); 4];
     let mut cluster_candidates = [(!0, !0); 4];
@@ -350,11 +348,9 @@ mod stats {
 
     #[test]
     fn random_insertion_stats() {
-        let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore {
-            max_cluster_len: 5,
-            new_layer_threshold_clusters: 5,
-            ..HrcCore::new()
-        };
+        let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore::new()
+            .max_cluster_len(5)
+            .new_layer_threshold_clusters(5);
 
         let mut candidates = [(LayerIndex::empty(), !0); 1024];
         let mut cluster_candidates = [(!0, !0); 1];

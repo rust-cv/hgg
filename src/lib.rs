@@ -24,9 +24,9 @@ pub struct HrcCore<K, V> {
     /// The number of items stored in this HRC.
     len: usize,
     /// Clusters with more items than this are split apart.
-    pub max_cluster_len: usize,
+    max_cluster_len: usize,
     /// Number of clusters before a new layer is created.
-    pub new_layer_threshold_clusters: usize,
+    new_layer_threshold_clusters: usize,
 }
 
 impl<K, V> HrcCore<K, V> {
@@ -38,6 +38,23 @@ impl<K, V> HrcCore<K, V> {
             len: 0,
             max_cluster_len: 1024,
             new_layer_threshold_clusters: 1024,
+        }
+    }
+
+    /// Sets the max number of items allowed in a cluster before it is split apart.
+    pub fn max_cluster_len(self, max_cluster_len: usize) -> Self {
+        Self {
+            max_cluster_len,
+            ..self
+        }
+    }
+
+    /// Sets the minimum number of clusters before a new layer is created.
+    pub fn new_layer_threshold_clusters(self, new_layer_threshold_clusters: usize) -> Self {
+        // TODO: This may not need to exist if we just create layers until the top layer is size 1.
+        Self {
+            new_layer_threshold_clusters,
+            ..self
         }
     }
 
