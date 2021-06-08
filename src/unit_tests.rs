@@ -1,12 +1,9 @@
 extern crate std;
 
 use crate::{HrcCluster, HrcCore, HrcLayer, LayerIndex};
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 use bitvec::vec::BitVec;
-use itertools::Itertools;
-use rand::{Rng, SeedableRng};
-use space::{Bits256, Hamming};
-use std::eprintln;
+use space::Hamming;
 
 fn test_layer() -> HrcLayer<Hamming<u8>, &'static str> {
     let mut first_cluster = HrcCluster::new(Hamming(0b1101));
@@ -341,70 +338,81 @@ fn test_cluster_split() {
     );
 }
 
-#[test]
-fn random_insertion_stats() {
-    let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore {
-        max_cluster_len: 5,
-        new_layer_threshold_clusters: 5,
-        ..HrcCore::new()
-    };
+#[cfg(feature = "stats")]
+mod stats {
+    use super::std::eprintln;
+    use crate::{HrcCore, LayerIndex};
+    use alloc::{vec, vec::Vec};
+    use bitvec::vec::BitVec;
+    use itertools::Itertools;
+    use rand::{Rng, SeedableRng};
+    use space::{Bits256, Hamming};
 
-    let mut candidates = [(LayerIndex::empty(), !0); 4096];
-    let mut cluster_candidates = [(!0, !0); 1];
-    let mut to_search = vec![];
-    let mut searched = BitVec::new();
+    #[test]
+    fn random_insertion_stats() {
+        let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore {
+            max_cluster_len: 5,
+            new_layer_threshold_clusters: 5,
+            ..HrcCore::new()
+        };
 
-    // Use a PRNG with good statistical properties for generating 64-bit numbers.
-    let rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
+        let mut candidates = [(LayerIndex::empty(), !0); 1024];
+        let mut cluster_candidates = [(!0, !0); 1];
+        let mut to_search = vec![];
+        let mut searched = BitVec::new();
 
-    // Generate random keys.
-    let keys: Vec<Hamming<Bits256>> = rng
-        .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
-        .map(Bits256)
-        .map(Hamming)
-        .take(1 << 14)
-        .collect();
+        // Use a PRNG with good statistical properties for generating 64-bit numbers.
+        let rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
-    // Insert keys into HRC.
-    for (ix, &key) in keys.iter().enumerate() {
-        if ix % 1000 == 0 {
-            eprintln!("Inserting {}", ix);
-            eprintln!("Stats: {:?}", hrc.stats());
+        // Generate random keys.
+        let keys: Vec<Hamming<Bits256>> = rng
+            .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
+            .map(Bits256)
+            .map(Hamming)
+            .take(1 << 12)
+            .collect();
+
+        // Insert keys into HRC.
+        for (ix, &key) in keys.iter().enumerate() {
+            if ix % 1000 == 0 {
+                eprintln!("Inserting {}", ix);
+                eprintln!("Stats: {:?}", hrc.stats());
+            }
+            hrc.insert(
+                key,
+                (),
+                &mut candidates,
+                &mut cluster_candidates,
+                &mut to_search,
+                &mut searched,
+            );
         }
-        hrc.insert(
-            key,
-            (),
-            &mut candidates,
-            &mut cluster_candidates,
-            &mut to_search,
-            &mut searched,
-        );
-    }
 
-    for (ix, key) in keys.iter().enumerate() {
-        if ix % 100 == 0 {
-            eprintln!("Searching {}", ix);
+        for (ix, key) in keys.iter().enumerate() {
+            if ix % 100 == 0 {
+                eprintln!("Searching {}", ix);
+            }
+            // Search each key.
+            hrc.search(key, &mut candidates, &mut to_search, &mut searched);
+            // Make sure that the best result is this key.
+            assert_eq!(hrc.get(candidates[0].0).unwrap().0, key);
         }
-        // Search each key.
-        hrc.search(key, &mut candidates, &mut to_search, &mut searched);
-        // Make sure that the best result is this key.
-        assert_eq!(hrc.get(candidates[0].0).unwrap().0, key);
-    }
 
-    for layer in &hrc.layers {
-        // Make sure that all the u32 index values in this layer are unique across the whole layer (or there is a bug).
-        assert_eq!(
-            layer
-                .clusters
-                .iter()
-                .flat_map(|cluster| cluster.values.iter().copied())
-                .unique()
-                .count(),
-            layer
-                .clusters
-                .iter()
-                .flat_map(|cluster| cluster.values.iter().copied())
-                .count()
-        );
+        for layer in &hrc.layers {
+            // Make sure that all the u32 index values in this layer are unique across the whole layer (or there is a bug).
+            assert_eq!(
+                layer
+                    .clusters
+                    .iter()
+                    .flat_map(|cluster| cluster.values.iter().copied())
+                    .unique()
+                    .count(),
+                layer
+                    .clusters
+                    .iter()
+                    .flat_map(|cluster| cluster.values.iter().copied())
+                    .count()
+            );
+        }
     }
 }

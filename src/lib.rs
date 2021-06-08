@@ -4,19 +4,18 @@ extern crate alloc;
 #[cfg(test)]
 mod unit_tests;
 
+#[cfg(feature = "stats")]
+mod stats;
+#[cfg(feature = "stats")]
+pub use stats::*;
+
 use alloc::vec;
 use alloc::vec::Vec;
 use bitvec::vec::BitVec;
 use itertools::Itertools;
 use space::MetricPoint;
 
-#[derive(Clone, Debug)]
-pub struct Stats {
-    pub layer_cluster_neigbors_histogram: Vec<Vec<(usize, usize)>>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct HrcCore<K, V> {
     /// Each layer maps keys (representing the cluster center) to the index in the next layer (as a u32).
     layers: Vec<HrcLayer<K, u32>>,
@@ -99,8 +98,10 @@ impl<K, V> HrcCore<K, V> {
             .collect()
     }
 
+    #[cfg(feature = "stats")]
     pub fn stats(&self) -> Stats {
         Stats {
+            len: self.len,
             layer_cluster_neigbors_histogram: self.layer_cluster_neighbors_histogram(),
         }
     }
