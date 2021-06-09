@@ -115,6 +115,14 @@ impl<K, V> HrcCore<K, V> {
             .collect()
     }
 
+    /// Reports the number of layers in the HRC.
+    ///
+    /// There is always at least one layer, but there may be additional layers if more items are
+    /// added.
+    pub fn layers(&self) -> usize {
+        self.layers.len() + 1
+    }
+
     #[cfg(feature = "stats")]
     pub fn stats(&self) -> Stats {
         Stats {

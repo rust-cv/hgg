@@ -19,3 +19,5 @@ smallvec = { version = "1.6.1", default-features = false }
 rand = "0.8.3"
 rand_xoshiro = "0.6.0"
 itertools = { version = "0.10.0" }
+csv = "1.1.6"
+serde = { version = "1.0.126", features = ["derive"] }
