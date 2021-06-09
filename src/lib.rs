@@ -6,6 +6,7 @@ mod unit_tests;
 
 #[cfg(feature = "stats")]
 mod stats;
+
 #[cfg(feature = "stats")]
 pub use stats::*;
 
@@ -759,12 +760,13 @@ where
     /// Returns the slice of keys and values that could beat a given distance and a bool indicating if the
     /// cluster radius distance could have encompassed a relevant point.
     fn potential_closer_items(&self, center_distance: u32, must_beat: u32) -> (&[K], bool) {
-        let minimum_inclusive = (center_distance + 1).saturating_sub(must_beat);
+        let minimum_inclusive = center_distance.saturating_sub(must_beat.saturating_sub(1));
         let maximum_exclusive = center_distance.saturating_add(must_beat);
         let begin = self.distances.partition_point(|&d| d < minimum_inclusive);
         let end = self.distances.partition_point(|&d| d < maximum_exclusive);
         (
-            &self.keys[begin..end],
+            // We need to use the `unwrap_or` because if `must_beat` is 0, the range will cause a panic.
+            self.keys.get(begin..end).unwrap_or(&[]),
             minimum_inclusive <= self.distances.last().copied().unwrap_or(0),
         )
     }

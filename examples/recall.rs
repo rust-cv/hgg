@@ -2,14 +2,14 @@ extern crate std;
 
 use bitvec::vec::BitVec;
 use hrc::{HrcCore, LayerIndex};
-use rand::{Rng, SeedableRng};
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
-use std::time::Instant;
+use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 12;
-const NUM_SEARCH_QUERRIES: usize = 1 << 10;
-const HIGHEST_POWER_CANDIDATES: u32 = 14;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 17;
+const NUM_SEARCH_QUERRIES: usize = 1 << 8;
+const HIGHEST_POWER_CANDIDATES: u32 = 5;
+const CREATION_CANDIDATES: usize = 1 << 8;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -18,7 +18,59 @@ struct Record {
     candidates_size: usize,
     num_queries: usize,
     layers: usize,
+    seconds_per_query: f64,
     queries_per_second: f64,
+}
+
+fn retrieve_search_and_query() -> (Vec<Hamming<Bits256>>, Vec<Hamming<Bits256>>) {
+    let descriptor_size_bytes = 61;
+    let total_descriptors = 1 << HIGHEST_POWER_SEARCH_SPACE;
+    let filepath = "akaze";
+    let total_query_strings = NUM_SEARCH_QUERRIES;
+    // Read in search space.
+    eprintln!(
+        "Reading {} search space descriptors of size {} bytes from file \"{}\"...",
+        total_descriptors, descriptor_size_bytes, filepath
+    );
+    let mut file = std::fs::File::open(filepath).expect("unable to open file");
+    let mut v = vec![0u8; total_descriptors * descriptor_size_bytes];
+    file.read_exact(&mut v).expect(
+        "unable to read enough search descriptors from the file; add more descriptors to file",
+    );
+    let search_space: Vec<Hamming<Bits256>> = v
+        .chunks_exact(descriptor_size_bytes)
+        .map(|b| {
+            let mut arr = [0; 32];
+            for (d, &s) in arr.iter_mut().zip(b) {
+                *d = s;
+            }
+            Hamming(Bits256(arr))
+        })
+        .collect();
+    eprintln!("Done.");
+
+    // Read in query strings.
+    eprintln!(
+        "Reading {} query descriptors of size {} bytes from file \"{}\"...",
+        total_query_strings, descriptor_size_bytes, filepath
+    );
+    let mut v = vec![0u8; total_query_strings * descriptor_size_bytes];
+    file.read_exact(&mut v).expect(
+        "unable to read enough search descriptors from the file; add more descriptors to file",
+    );
+    let query_strings: Vec<Hamming<Bits256>> = v
+        .chunks_exact(descriptor_size_bytes)
+        .map(|b| {
+            let mut arr = [0; 32];
+            for (d, &s) in arr.iter_mut().zip(b) {
+                *d = s;
+            }
+            Hamming(Bits256(arr))
+        })
+        .collect();
+    eprintln!("Done.");
+
+    (search_space, query_strings)
 }
 
 fn main() {
@@ -26,29 +78,13 @@ fn main() {
         .max_cluster_len(5)
         .new_layer_threshold_clusters(5);
 
-    let mut candidates = [(LayerIndex::empty(), !0); 4096];
+    let mut candidates = [(LayerIndex::empty(), !0); CREATION_CANDIDATES];
     let mut cluster_candidates = [(!0, !0); 1];
     let mut to_search = vec![];
     let mut searched = BitVec::new();
 
-    // Use a PRNG with good statistical properties for generating 64-bit numbers.
-    let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-
     // Generate random keys.
-    let keys: Vec<Hamming<Bits256>> = (&mut rng)
-        .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
-        .map(Bits256)
-        .map(Hamming)
-        .take(1 << HIGHEST_POWER_SEARCH_SPACE)
-        .collect();
-
-    // Generate random search queries.
-    let queries: Vec<Hamming<Bits256>> = rng
-        .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
-        .map(Bits256)
-        .map(Hamming)
-        .take(NUM_SEARCH_QUERRIES)
-        .collect();
+    let (keys, queries) = retrieve_search_and_query();
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
@@ -61,6 +97,7 @@ fn main() {
             1 << (pow - 1)..1 << pow
         };
         // Insert keys into HRC.
+        eprintln!("Inserting keys into HRC");
         for &key in &keys[range] {
             hrc.insert(
                 key,
@@ -106,10 +143,10 @@ fn main() {
                 .filter(|&(&searched_ix, &correct)| *hrc.get(searched_ix).unwrap().0 == correct)
                 .count();
             let recall = num_correct as f64 / NUM_SEARCH_QUERRIES as f64;
-            let queries_per_second = (end_time - start_time)
+            let seconds_per_query = (end_time - start_time)
                 .div_f64(NUM_SEARCH_QUERRIES as f64)
-                .as_secs_f64()
-                .recip();
+                .as_secs_f64();
+            let queries_per_second = seconds_per_query.recip();
             csv_out
                 .serialize(Record {
                     recall,
@@ -117,6 +154,7 @@ fn main() {
                     search_size: 1 << pow,
                     num_queries: NUM_SEARCH_QUERRIES,
                     layers: hrc.layers(),
+                    seconds_per_query,
                     queries_per_second,
                 })
                 .expect("failed to serialize record");

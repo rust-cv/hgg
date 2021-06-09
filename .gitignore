@@ -4,3 +4,6 @@ Cargo.lock
 
 # Recall graph outputs
 *.csv
+
+# Descriptor file
+/akaze
