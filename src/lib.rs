@@ -81,6 +81,15 @@ where
 
         best_node
     }
+
+    /// Performs a search to the query key using greedy search.
+    pub fn search(&self, query: &K) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.search_from(0, query))
+        }
+    }
 }
 
 impl<K, V> Default for HrcCore<K, V> {
