@@ -90,6 +90,20 @@ where
             Some(self.search_from(0, query))
         }
     }
+
+    /// Insert a (key, value) pair.
+    pub fn insert(&mut self, key: K, value: V) -> usize {
+        if self.is_empty() {
+            self.zero.push(HrcZeroNode {
+                key,
+                value,
+                edges: vec![],
+            });
+            self.zero.len() - 1
+        } else {
+            unimplemented!()
+        }
+    }
 }
 
 impl<K, V> Default for HrcCore<K, V> {
