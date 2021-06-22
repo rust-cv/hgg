@@ -22,15 +22,15 @@ struct HrcZeroNode<K, V> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct HrcCore<K, V> {
+pub struct Hrc<K, V> {
     /// The zero layer.
     zero: Vec<HrcZeroNode<K, V>>,
     /// Clusters with more items than this are split apart.
     max_cluster_len: usize,
 }
 
-impl<K, V> HrcCore<K, V> {
-    /// Creates a new [`HrcCore`]. It will be empty and begin with default settings.
+impl<K, V> Hrc<K, V> {
+    /// Creates a new [`Hrc`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
             zero: vec![],
@@ -46,9 +46,19 @@ impl<K, V> HrcCore<K, V> {
         }
     }
 
-    /// Retrieves the value from a [`LayerIndex`].
+    /// Get the (key, value) pair of a node.
     pub fn get(&self, node: usize) -> Option<(&K, &V)> {
         self.zero.get(node).map(|node| (&node.key, &node.value))
+    }
+
+    /// Get the key of a node.
+    pub fn get_key(&self, node: usize) -> Option<&K> {
+        self.zero.get(node).map(|node| &node.key)
+    }
+
+    /// Get the value of a node.
+    pub fn get_value(&self, node: usize) -> Option<&V> {
+        self.zero.get(node).map(|node| &node.value)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -60,7 +70,7 @@ impl<K, V> HrcCore<K, V> {
     }
 }
 
-impl<K, V> HrcCore<K, V>
+impl<K, V> Hrc<K, V>
 where
     K: MetricPoint + Clone,
 {
@@ -106,7 +116,7 @@ where
     }
 }
 
-impl<K, V> Default for HrcCore<K, V> {
+impl<K, V> Default for Hrc<K, V> {
     fn default() -> Self {
         Self::new()
     }

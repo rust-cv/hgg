@@ -1,23 +1,18 @@
 extern crate std;
 
-use bitvec::vec::BitVec;
-use hrc::{HrcCore, LayerIndex};
+use hrc::Hrc;
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
 const HIGHEST_POWER_SEARCH_SPACE: u32 = 17;
 const NUM_SEARCH_QUERRIES: usize = 1 << 8;
-const HIGHEST_POWER_CANDIDATES: u32 = 5;
-const CREATION_CANDIDATES: usize = 1 << 8;
 
 #[derive(Debug, Serialize)]
 struct Record {
     recall: f64,
     search_size: usize,
-    candidates_size: usize,
     num_queries: usize,
-    layers: usize,
     seconds_per_query: f64,
     queries_per_second: f64,
 }
@@ -74,14 +69,7 @@ fn retrieve_search_and_query() -> (Vec<Hamming<Bits256>>, Vec<Hamming<Bits256>>)
 }
 
 fn main() {
-    let mut hrc: HrcCore<Hamming<Bits256>, ()> = HrcCore::new()
-        .max_cluster_len(5)
-        .new_layer_threshold_clusters(5);
-
-    let mut candidates = [(LayerIndex::empty(), !0); CREATION_CANDIDATES];
-    let mut cluster_candidates = [(!0, !0); 1];
-    let mut to_search = vec![];
-    let mut searched = BitVec::new();
+    let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new().max_cluster_len(5);
 
     // Generate random keys.
     let (keys, queries) = retrieve_search_and_query();
@@ -99,14 +87,7 @@ fn main() {
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC");
         for &key in &keys[range] {
-            hrc.insert(
-                key,
-                (),
-                &mut candidates,
-                &mut cluster_candidates,
-                &mut to_search,
-                &mut searched,
-            );
+            hrc.insert(key, ());
         }
 
         let correct_nearest: Vec<Hamming<Bits256>> = queries
@@ -120,44 +101,32 @@ fn main() {
             })
             .collect();
 
-        for pow_candidates in 0..=HIGHEST_POWER_CANDIDATES {
-            eprintln!(
-                "doing size {} with candidates {}",
-                1 << pow,
-                1 << pow_candidates
-            );
-            let candidates_size = 1 << pow_candidates;
-            let mut candidates = vec![(LayerIndex::empty(), !0); candidates_size];
-            let start_time = Instant::now();
-            let search_bests: Vec<LayerIndex> = queries
-                .iter()
-                .map(|query| {
-                    hrc.search(query, &mut candidates[..], &mut to_search, &mut searched);
-                    candidates[0].0
-                })
-                .collect();
-            let end_time = Instant::now();
-            let num_correct = search_bests
-                .iter()
-                .zip(correct_nearest.iter())
-                .filter(|&(&searched_ix, &correct)| *hrc.get(searched_ix).unwrap().0 == correct)
-                .count();
-            let recall = num_correct as f64 / NUM_SEARCH_QUERRIES as f64;
-            let seconds_per_query = (end_time - start_time)
-                .div_f64(NUM_SEARCH_QUERRIES as f64)
-                .as_secs_f64();
-            let queries_per_second = seconds_per_query.recip();
-            csv_out
-                .serialize(Record {
-                    recall,
-                    candidates_size,
-                    search_size: 1 << pow,
-                    num_queries: NUM_SEARCH_QUERRIES,
-                    layers: hrc.layers(),
-                    seconds_per_query,
-                    queries_per_second,
-                })
-                .expect("failed to serialize record");
-        }
+        eprintln!("doing size {}", 1 << pow);
+        let start_time = Instant::now();
+        let search_bests: Vec<usize> = queries
+            .iter()
+            .map(|query| hrc.search(query).unwrap())
+            .collect();
+        let end_time = Instant::now();
+        let num_correct = search_bests
+            .iter()
+            .zip(correct_nearest.iter())
+            .filter(|&(&searched_ix, &correct)| *hrc.get_key(searched_ix).unwrap() == correct)
+            .count();
+        let recall = num_correct as f64 / NUM_SEARCH_QUERRIES as f64;
+        let seconds_per_query = (end_time - start_time)
+            .div_f64(NUM_SEARCH_QUERRIES as f64)
+            .as_secs_f64();
+        let queries_per_second = seconds_per_query.recip();
+        csv_out
+            .serialize(Record {
+                recall,
+                search_size: 1 << pow,
+                num_queries: NUM_SEARCH_QUERRIES,
+                seconds_per_query,
+                queries_per_second,
+            })
+            .expect("failed to serialize record");
+        eprintln!("finished size {}", 1 << pow);
     }
 }
