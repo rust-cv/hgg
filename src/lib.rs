@@ -7,6 +7,7 @@ mod unit_tests;
 #[cfg(feature = "stats")]
 mod stats;
 
+use itertools::Itertools;
 #[cfg(feature = "stats")]
 pub use stats::*;
 
@@ -68,6 +69,22 @@ impl<K, V> Hrc<K, V> {
     pub fn len(&self) -> usize {
         self.zero.len()
     }
+
+    fn add_edge(&mut self, a: usize, b: usize) {
+        self.zero[a].edges.push(b);
+        self.zero[b].edges.push(a);
+    }
+
+    fn add_edge_dedup(&mut self, a: usize, b: usize) {
+        if !self.zero[a].edges.contains(&b) {
+            self.add_edge(a, b);
+        }
+    }
+
+    fn remove_edge(&mut self, a: usize, b: usize) {
+        self.zero[a].edges.retain(|&node| node != b);
+        self.zero[b].edges.retain(|&node| node != a);
+    }
 }
 
 impl<K, V> Hrc<K, V>
@@ -76,7 +93,7 @@ where
 {
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     pub fn search_from(&self, from: usize, query: &K) -> usize {
-        let mut queue = vec![from];
+        let mut queue = self.zero[from].edges.clone();
         let mut best_node = from;
         let mut best_distance = query.distance(&self.zero[from].key);
 
@@ -101,18 +118,131 @@ where
         }
     }
 
-    /// Insert a (key, value) pair.
-    pub fn insert(&mut self, key: K, value: V) -> usize {
-        if self.is_empty() {
-            self.zero.push(HrcZeroNode {
-                key,
-                value,
-                edges: vec![],
-            });
-            self.zero.len() - 1
-        } else {
-            unimplemented!()
+    /// Finds the knn greedily from a starting node `from`.
+    ///
+    /// Returns (node, distance) pairs.
+    pub fn search_knn_from(&self, from: usize, query: &K, num: usize) -> Vec<(usize, u32)> {
+        assert!(
+            num > 0,
+            "the number of nearest neighbors queried MUST be at least 1"
+        );
+        // Perform a greedy search first to save time.
+        let from = self.search_from(from, query);
+        let mut queue = self.zero[from].edges.clone();
+        // Contains the index and the distance as a pair.
+        let mut bests = vec![(from, query.distance(&self.zero[from].key))];
+
+        while let Some(search_node) = queue.pop() {
+            if bests.iter().any(|&(node, _)| search_node == node) {
+                continue;
+            }
+            let distance = query.distance(&self.zero[search_node].key);
+            // If we dont have enough yet, add it.
+            if bests.len() < num {
+                bests.insert(
+                    bests.partition_point(|&(_, best_distance)| best_distance <= distance),
+                    (search_node, distance),
+                );
+                queue.extend(self.zero[search_node].edges.iter().copied());
+                continue;
+            }
+            // Otherwise only add it if its better than the worst item we have.
+            if distance < bests.last().unwrap().1 {
+                bests.pop();
+                bests.insert(
+                    bests.partition_point(|&(_, best_distance)| best_distance <= distance),
+                    (search_node, distance),
+                );
+                queue.extend(self.zero[search_node].edges.iter().copied());
+            }
         }
+
+        bests
+    }
+
+    /// Insert a (key, value) pair.
+    ///
+    /// `quality` is a value of at least `1` which describes the number of nearest neighbors
+    /// used to ensure greedy search around the inserted item. This number needs to be higher based
+    /// on the dimensionality of the data set, and specifically the dimensionality of the region that
+    /// this point is inserted.
+    pub fn insert(&mut self, key: K, value: V, quality: usize) -> usize {
+        // Add the node (it will be added this way regardless).
+        let new_node = self.zero.len();
+        self.zero.push(HrcZeroNode {
+            key: key.clone(),
+            value,
+            edges: vec![],
+        });
+
+        // If this is the only node, just return it.
+        if new_node == 0 {
+            return new_node;
+        }
+
+        // Search for the nearest neighbors.
+        let knn = self.search_knn_from(0, &key, quality);
+
+        for &(nn, _) in &knn {
+            self.optimize_connection(nn, new_node);
+        }
+
+        new_node
+    }
+
+    /// Optimizes the connection between two nodes to ensure a greedy search path is available in both directions.
+    pub fn optimize_connection(&mut self, a: usize, b: usize) {
+        // Search from a to b.
+        let found = self.search_from(a, &self.zero[b].key);
+        // If we didn't reach b, connect the found node to b.
+        if found != b {
+            self.add_edge_dedup(found, b);
+        }
+    }
+
+    /// Removes a node from the graph and then reinserts it with the given quality.
+    ///
+    /// This is useful to prune unecessary connections in the graph.
+    pub fn optimize_node(&mut self, node: usize, quality: usize) {
+        let neighbors = self.zero[node].edges.iter().copied().collect_vec();
+
+        for neighbor in neighbors {
+            self.remove_edge(node, neighbor);
+        }
+
+        // Search for the nearest neighbors.
+        let knn = self.search_knn_from(
+            if node == 0 {
+                if self.len() == 1 {
+                    return;
+                } else {
+                    1
+                }
+            } else {
+                0
+            },
+            &self.zero[node].key,
+            quality,
+        );
+
+        for (nn, _) in knn {
+            // Search for the new node from the nearest neighbor, connecting the found node with the new_node.
+            let found = self.search_from(nn, &self.zero[node].key);
+            if found != node {
+                self.add_edge_dedup(found, node);
+            }
+        }
+    }
+
+    /// Globally optimizes the graph with the given quality level.
+    pub fn optimize(&mut self, quality: usize) {
+        for node in 0..self.len() {
+            self.optimize_node(node, quality);
+        }
+    }
+
+    fn distance(&self, a: usize, b: usize) -> u32 {
+        self.zero[a].key.distance(&self.zero[b].key)
     }
 }
 

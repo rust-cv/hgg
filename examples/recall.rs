@@ -5,7 +5,7 @@ use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 17;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 16;
 const NUM_SEARCH_QUERRIES: usize = 1 << 8;
 
 #[derive(Debug, Serialize)]
@@ -50,6 +50,7 @@ fn retrieve_search_and_query() -> (Vec<Hamming<Bits256>>, Vec<Hamming<Bits256>>)
         total_query_strings, descriptor_size_bytes, filepath
     );
     let mut v = vec![0u8; total_query_strings * descriptor_size_bytes];
+    (&mut file).take(8192).read_to_end(&mut vec![]).unwrap();
     file.read_exact(&mut v).expect(
         "unable to read enough search descriptors from the file; add more descriptors to file",
     );
@@ -85,9 +86,9 @@ fn main() {
             1 << (pow - 1)..1 << pow
         };
         // Insert keys into HRC.
-        eprintln!("Inserting keys into HRC");
+        eprintln!("Inserting keys into HRC size {}", 1 << pow);
         for &key in &keys[range] {
-            hrc.insert(key, ());
+            hrc.insert(key, (), 32);
         }
 
         let correct_nearest: Vec<Hamming<Bits256>> = queries
@@ -105,7 +106,7 @@ fn main() {
         let start_time = Instant::now();
         let search_bests: Vec<usize> = queries
             .iter()
-            .map(|query| hrc.search(query).unwrap())
+            .map(|query| hrc.search_knn_from(0, query, 32)[0].0)
             .collect();
         let end_time = Instant::now();
         let num_correct = search_bests

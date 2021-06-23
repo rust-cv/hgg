@@ -346,7 +346,7 @@ mod stats {
                 eprintln!("Inserting {}", ix);
                 // eprintln!("Stats: {:?}", hrc.stats());
             }
-            hrc.insert(key, ());
+            hrc.insert(key, (), 32);
         }
 
         for (ix, key) in keys.iter().enumerate() {
