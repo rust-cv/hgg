@@ -10,12 +10,11 @@ default = ["stats"]
 stats = []
 
 [dependencies]
-space = { version = "0.11.0", default-features = false, features = ["simd-hamming"] }
-bitvec = { version = "0.22.3", default-features = false, features = ["alloc"] }
+space = { version = "0.11.0", default-features = false }
 itertools = { version = "0.10.0", default-features = false }
-smallvec = { version = "1.6.1", default-features = false }
 
 [dev-dependencies]
+space = { version = "0.11.0", default-features = false, features = ["simd-hamming"] }
 rand = "0.8.3"
 rand_xoshiro = "0.6.0"
 itertools = { version = "0.10.0" }

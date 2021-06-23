@@ -13,7 +13,6 @@ pub use stats::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use smallvec::{smallvec, SmallVec};
 use space::MetricPoint;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,7 +252,8 @@ where
         }
     }
 
-    fn distance(&self, a: usize, b: usize) -> u32 {
+    /// Computes the distance between two nodes.
+    pub fn distance(&self, a: usize, b: usize) -> u32 {
         self.zero[a].key.distance(&self.zero[b].key)
     }
 }
