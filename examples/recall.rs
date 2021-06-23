@@ -91,6 +91,8 @@ fn main() {
             hrc.insert(key, (), 32);
         }
 
+        eprintln!("Histogram: {:?}", hrc.histogram());
+
         let correct_nearest: Vec<Hamming<Bits256>> = queries
             .iter()
             .map(|query| {

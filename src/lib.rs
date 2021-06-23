@@ -13,6 +13,7 @@ pub use stats::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use smallvec::{smallvec, SmallVec};
 use space::MetricPoint;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +85,17 @@ impl<K, V> Hrc<K, V> {
     fn remove_edge(&mut self, a: usize, b: usize) {
         self.zero[a].edges.retain(|&node| node != b);
         self.zero[b].edges.retain(|&node| node != a);
+    }
+
+    pub fn histogram(&self) -> Vec<(usize, usize)> {
+        let mut histogram = vec![];
+        for edges in self.zero.iter().map(|node| node.edges.len()) {
+            match histogram.binary_search_by_key(&edges, |&(search_edges, _)| search_edges) {
+                Ok(pos) => histogram[pos].1 += 1,
+                Err(pos) => histogram.insert(pos, (edges, 1)),
+            }
+        }
+        histogram
     }
 }
 
