@@ -19,7 +19,7 @@ use space::MetricPoint;
 struct HrcZeroNode<K, V> {
     key: K,
     value: V,
-    edges: Vec<usize>,
+    edges: Vec<(K, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,20 +70,17 @@ impl<K, V> Hrc<K, V> {
         self.zero.len()
     }
 
-    fn add_edge(&mut self, a: usize, b: usize) {
-        self.zero[a].edges.push(b);
-        self.zero[b].edges.push(a);
+    pub fn neighbors(&self, node: usize) -> impl Iterator<Item = usize> + '_ {
+        self.zero[node].edges.iter().map(|&(_, node)| node)
     }
 
-    fn add_edge_dedup(&mut self, a: usize, b: usize) {
-        if !self.zero[a].edges.contains(&b) {
-            self.add_edge(a, b);
-        }
+    pub fn neighbor_keys(&self, node: usize) -> impl Iterator<Item = (&K, usize)> + '_ {
+        self.zero[node].edges.iter().map(|(key, node)| (key, *node))
     }
 
     fn remove_edge(&mut self, a: usize, b: usize) {
-        self.zero[a].edges.retain(|&node| node != b);
-        self.zero[b].edges.retain(|&node| node != a);
+        self.zero[a].edges.retain(|&(_, node)| node != b);
+        self.zero[b].edges.retain(|&(_, node)| node != a);
     }
 
     pub fn histogram(&self) -> Vec<(usize, usize)> {
@@ -95,6 +92,24 @@ impl<K, V> Hrc<K, V> {
             }
         }
         histogram
+    }
+}
+
+impl<K, V> Hrc<K, V>
+where
+    K: Clone,
+{
+    fn add_edge(&mut self, a: usize, b: usize) {
+        let a_key = self.zero[a].key.clone();
+        let b_key = self.zero[b].key.clone();
+        self.zero[a].edges.push((b_key, b));
+        self.zero[b].edges.push((a_key, a));
+    }
+
+    fn add_edge_dedup(&mut self, a: usize, b: usize) {
+        if !self.neighbors(a).any(|node| node == b) {
+            self.add_edge(a, b);
+        }
     }
 }
 
@@ -113,102 +128,114 @@ where
 
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     pub fn search_from(&self, from: usize, query: &K) -> usize {
-        let mut queue = self.zero[from].edges.clone();
         let mut best_node = from;
         let mut best_distance = query.distance(&self.zero[from].key);
 
-        while let Some(search_node) = queue.pop() {
-            let distance = query.distance(&self.zero[search_node].key);
+        while let Some((neighbor_node, distance)) = self
+            .neighbor_keys(best_node)
+            .map(|(neighbor_key, neighbor_node)| (neighbor_node, query.distance(neighbor_key)))
+            .min_by_key(|&(_, distance)| distance)
+        {
             if distance < best_distance {
-                best_node = search_node;
+                best_node = neighbor_node;
                 best_distance = distance;
-                queue.extend(self.zero[search_node].edges.iter().copied());
+            } else {
+                break;
             }
         }
-
         best_node
-    }
-
-    /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
-    /// that it traveled to reach the destination.
-    pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
-        let mut queue = self.zero[from]
-            .edges
-            .iter()
-            .map(|&neighbor| (from, neighbor))
-            .collect_vec();
-        let mut path = vec![from];
-        let mut best_distance = query.distance(&self.zero[from].key);
-
-        while let Some((previous_node, search_node)) = queue.pop() {
-            let distance = query.distance(&self.zero[search_node].key);
-            if distance < best_distance {
-                best_distance = distance;
-                // Find the position in the path where the previous node is at.
-                let path_position = path
-                    .iter()
-                    .enumerate()
-                    .rfind(|&(_, &node)| node == previous_node)
-                    .unwrap()
-                    .0;
-                // Remove all nodes after this node's previous node (erasing any alternate paths we took).
-                path.resize_with(path_position + 1, || panic!("this cannot happen, as we cant find something beyond the end of the vector"));
-                // Add this node (now the newest in the path.)
-                path.push(search_node);
-                // Add this nodes neighbors to the queue, making the previous node this node.
-                queue.extend(
-                    self.zero[search_node]
-                        .edges
-                        .iter()
-                        .map(|&neighbor| (search_node, neighbor)),
-                );
-            }
-        }
-
-        path
     }
 
     /// Finds the knn greedily from a starting node `from`.
     ///
-    /// Returns (node, distance) pairs.
-    pub fn search_knn_from(&self, from: usize, query: &K, num: usize) -> Vec<(usize, u32)> {
+    /// Returns (node, distance, searched) pairs. `searched` will always be true, so you can ignore it.
+    pub fn search_knn_from(&self, from: usize, query: &K, num: usize) -> Vec<(usize, u32, bool)> {
         assert!(
             num > 0,
             "the number of nearest neighbors queried MUST be at least 1"
         );
         // Perform a greedy search first to save time.
         let from = self.search_from(from, query);
-        let mut queue = self.zero[from].edges.clone();
         // Contains the index and the distance as a pair.
-        let mut bests = vec![(from, query.distance(&self.zero[from].key))];
+        let mut bests = vec![(from, query.distance(&self.zero[from].key), false)];
 
-        while let Some(search_node) = queue.pop() {
-            if bests.iter().any(|&(node, _)| search_node == node) {
-                continue;
-            }
-            let distance = query.distance(&self.zero[search_node].key);
-            // If we dont have enough yet, add it.
-            if bests.len() < num {
-                bests.insert(
-                    bests.partition_point(|&(_, best_distance)| best_distance <= distance),
-                    (search_node, distance),
-                );
-                queue.extend(self.zero[search_node].edges.iter().copied());
-                continue;
-            }
-            // Otherwise only add it if its better than the worst item we have.
-            if distance < bests.last().unwrap().1 {
-                bests.pop();
-                bests.insert(
-                    bests.partition_point(|&(_, best_distance)| best_distance <= distance),
-                    (search_node, distance),
-                );
-                queue.extend(self.zero[search_node].edges.iter().copied());
+        loop {
+            if let Some((previous_node, _, searched)) =
+                bests.iter_mut().find(|&&mut (_, _, searched)| !searched)
+            {
+                // Set this as searched (we are searching it now).
+                *searched = true;
+                // Erase the reference to the search node (to avoid lifetime & borrowing issues);
+                let previous_node = *previous_node;
+
+                for (search_key, search_node) in self.neighbor_keys(previous_node) {
+                    // Compute the distance from the query.
+                    let distance = query.distance(search_key);
+                    // If we dont have enough yet, add it.
+                    if bests.len() < num {
+                        // However, make sure that we don't have a copy of this node already.
+                        // Duplicates can form at this stage since they don't have to be better than current worst.
+                        if bests.iter().any(|&(node, _, _)| search_node == node) {
+                            continue;
+                        }
+                        bests.insert(
+                            bests.partition_point(|&(_, best_distance, _)| {
+                                best_distance <= distance
+                            }),
+                            (search_node, distance, false),
+                        );
+                    } else if distance < bests.last().unwrap().1 {
+                        // Otherwise only add it if its better than the worst item we have.
+                        bests.pop();
+                        bests.insert(
+                            bests.partition_point(|&(_, best_distance, _)| {
+                                best_distance <= distance
+                            }),
+                            (search_node, distance, false),
+                        );
+                    }
+                }
+            } else {
+                return bests;
             }
         }
-
-        bests
     }
+
+    // /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
+    // /// that it traveled to reach the destination.
+    // pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
+    //     let mut queue = self
+    //         .neighbors(from)
+    //         .map(|neighbor| (from, neighbor))
+    //         .collect_vec();
+    //     let mut path = vec![from];
+    //     let mut best_distance = query.distance(&self.zero[from].key);
+
+    //     while let Some((previous_node, search_node)) = queue.pop() {
+    //         let distance = query.distance(&self.zero[search_node].key);
+    //         if distance < best_distance {
+    //             best_distance = distance;
+    //             // Find the position in the path where the previous node is at.
+    //             let path_position = path
+    //                 .iter()
+    //                 .enumerate()
+    //                 .rfind(|&(_, &node)| node == previous_node)
+    //                 .unwrap()
+    //                 .0;
+    //             // Remove all nodes after this node's previous node (erasing any alternate paths we took).
+    //             path.resize_with(path_position + 1, || panic!("this cannot happen, as we cant find something beyond the end of the vector"));
+    //             // Add this node (now the newest in the path.)
+    //             path.push(search_node);
+    //             // Add this nodes neighbors to the queue, making the previous node this node.
+    //             queue.extend(
+    //                 self.neighbors(search_node)
+    //                     .map(|neighbor| (search_node, neighbor)),
+    //             );
+    //         }
+    //     }
+
+    //     path
+    // }
 
     /// Insert a (key, value) pair.
     ///
@@ -233,7 +260,7 @@ where
         // Search for the nearest neighbors.
         let knn = self.search_knn_from(0, &key, quality);
 
-        for &(nn, _) in &knn {
+        for &(nn, _, _) in &knn {
             self.optimize_connection(nn, new_node);
         }
 
@@ -247,7 +274,7 @@ where
             let knn = self.search_knn_from(0, key, quality);
             // Next, we want to ensure that if we encounter a situation in which we cannot search from
             // a nearer nearest neighbor to the nearest neighbor that we make that connection.
-            for &(nn, _) in &knn[1..] {
+            for &(nn, _, _) in &knn[1..] {
                 // Perform this search on the non-nearest neighbor.
                 let found = self.search_from(nn, key);
                 // If found is not the nearest neighbor, make sure that there is a connection.
@@ -272,7 +299,7 @@ where
     ///
     /// This is useful to prune unecessary connections in the graph.
     pub fn optimize_node(&mut self, node: usize, quality: usize) {
-        let neighbors = self.zero[node].edges.iter().copied().collect_vec();
+        let neighbors = self.neighbors(node).collect_vec();
 
         for neighbor in neighbors {
             self.remove_edge(node, neighbor);
@@ -293,7 +320,7 @@ where
             quality,
         );
 
-        for (nn, _) in knn {
+        for (nn, _, _) in knn {
             // Search for the new node from the nearest neighbor, connecting the found node with the new_node.
             let found = self.search_from(nn, &self.zero[node].key);
             if found != node {
