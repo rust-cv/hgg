@@ -260,12 +260,16 @@ where
         }
 
         // Disconnect the node from the graph.
+        self.disconnect(node);
+        // Connect the node to the graph.
+        self.connect(node, quality);
+    }
+
+    /// Internal function for disconnecting a node from the graph.
+    fn disconnect(&mut self, node: usize) {
         for neighbor in self.neighbors(node).collect_vec() {
             self.remove_edge(node, neighbor);
         }
-
-        // Connect the node to the graph.
-        self.connect(node, quality);
     }
 
     /// Internal function for adding a disconnected node.
