@@ -201,6 +201,24 @@ where
         new_node
     }
 
+    /// Trains the HRC by making connections so that the nearest neighbors to the given key can be found.
+    pub fn train(&mut self, key: &K, quality: usize) {
+        if self.zero.len() >= 2 {
+            // First, we want to find `quality` nearest neighbors to the key.
+            let knn = self.search_knn_from(0, key, quality);
+            // Next, we want to ensure that if we encounter a situation in which we cannot search from
+            // a nearer nearest neighbor to the nearest neighbor that we make that connection.
+            for &(nn, _) in &knn[1..] {
+                // Perform this search on the non-nearest neighbor.
+                let found = self.search_from(nn, key);
+                // If found is not the nearest neighbor, make sure that there is a connection.
+                if found != knn[0].0 {
+                    self.add_edge_dedup(knn[0].0, found);
+                };
+            }
+        }
+    }
+
     /// Optimizes the connection between two nodes to ensure a greedy search path is available in both directions.
     pub fn optimize_connection(&mut self, a: usize, b: usize) {
         // Search from a to b.
