@@ -239,31 +239,51 @@ where
         // Add the node (it will be added this way regardless).
         let new_node = self.zero.len();
         self.zero.push(HrcZeroNode {
-            key: key.clone(),
+            key,
             value,
             edges: vec![],
         });
 
-        // If this is the only node, just return it.
-        if new_node == 0 {
-            return new_node;
+        // Connect the node to the graph.
+        self.connect(new_node, quality);
+
+        new_node
+    }
+
+    /// Removes a node from the graph and then reinserts it with the given quality.
+    ///
+    /// This is useful to prune unecessary connections in the graph.
+    pub fn reinsert(&mut self, node: usize, quality: usize) {
+        // This wont work if we only have 1 node.
+        if self.len() < 2 {
+            return;
         }
 
+        // Disconnect the node from the graph.
+        for neighbor in self.neighbors(node).collect_vec() {
+            self.remove_edge(node, neighbor);
+        }
+
+        // Connect the node to the graph.
+        self.connect(node, quality);
+    }
+
+    /// Internal function for adding a disconnected node.
+    fn connect(&mut self, node: usize, quality: usize) {
         // Search for the nearest neighbors.
-        let knn = self.search_knn_from(0, &key, quality);
+        let knn =
+            self.search_knn_from(if node == 0 { 1 } else { 0 }, &self.zero[node].key, quality);
 
         // Connect it to its nearest neighbor (or optimizing will continue indefinitely).
-        self.add_edge(knn[0].0, new_node);
+        self.add_edge(knn[0].0, node);
 
         // Optimize the connection between the nearest neighbors (aside from the most nearest).
-        for &(nn, _, _) in &knn[1..] {
-            self.optimize_connection(nn, new_node, quality);
+        for &(nn, _, _) in &knn {
+            self.optimize_connection(nn, node, quality);
         }
 
         // Optimize the connection to the new node from the root.
-        self.optimize_connection_directed(0, new_node, quality);
-
-        new_node
+        self.optimize_connection_directed(0, node, quality);
     }
 
     /// Trains the HRC by making connections so that the nearest neighbors to the given key can be found.
@@ -344,40 +364,10 @@ where
         }
     }
 
-    /// Removes a node from the graph and then reinserts it with the given quality.
-    ///
-    /// This is useful to prune unecessary connections in the graph.
-    pub fn optimize_node(&mut self, node: usize, quality: usize) {
-        // This wont work if we only have 1 node.
-        if self.len() < 2 {
-            return;
-        }
-
-        // Remove the node's neighbors.
-        for neighbor in self.neighbors(node).collect_vec() {
-            self.remove_edge(node, neighbor);
-        }
-
-        // Search for the nearest neighbors.
-        let knn =
-            self.search_knn_from(if node == 0 { 1 } else { 0 }, &self.zero[node].key, quality);
-
-        // Connect it to its nearest neighbor (or optimizing will continue indefinitely).
-        self.add_edge(knn[0].0, node);
-
-        // Optimize the connection between the nearest neighbors (aside from the most nearest).
-        for &(nn, _, _) in &knn {
-            self.optimize_connection(nn, node, quality);
-        }
-
-        // Optimize the connection to the new node from the root.
-        self.optimize_connection_directed(0, node, quality);
-    }
-
     /// Globally optimizes the graph with the given quality level.
     pub fn optimize(&mut self, quality: usize) {
         for node in 0..self.len() {
-            self.optimize_node(node, quality);
+            self.reinsert(node, quality);
         }
     }
 

@@ -5,7 +5,7 @@ use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 13;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 12;
 const NUM_SEARCH_QUERRIES: usize = 1 << 8;
 const NUM_TRAINING_STRINGS: usize = 1 << 12;
 
@@ -87,8 +87,12 @@ fn main() {
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC size {}", 1 << pow);
         for &key in search_space {
-            hrc.insert(key, (), 64);
+            hrc.insert(key, (), 32);
         }
+
+        // eprintln!("Optimizing HRC size {}", 1 << pow);
+        // hrc.optimize(32);
+        // hrc.optimize(32);
 
         // eprintln!("Training with {} strings", NUM_TRAINING_STRINGS);
         // for train_key in &training {
