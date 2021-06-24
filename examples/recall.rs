@@ -5,7 +5,7 @@ use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 16;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 13;
 const NUM_SEARCH_QUERRIES: usize = 1 << 8;
 const NUM_TRAINING_STRINGS: usize = 1 << 12;
 
@@ -87,7 +87,7 @@ fn main() {
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC size {}", 1 << pow);
         for &key in search_space {
-            hrc.insert(key, (), 32);
+            hrc.insert(key, (), 64);
         }
 
         // eprintln!("Training with {} strings", NUM_TRAINING_STRINGS);
@@ -113,12 +113,15 @@ fn main() {
         let search_bests: Vec<usize> = query_space
             .iter()
             .map(|query| hrc.search_knn_from(0, query, 32)[0].0)
+            //.map(|query| hrc.search_from(0, query).0)
             .collect();
         let end_time = Instant::now();
         let num_correct = search_bests
             .iter()
             .zip(correct_nearest.iter())
-            .filter(|&(&searched_ix, &correct)| *hrc.get_key(searched_ix).unwrap() == correct)
+            .filter(|&(&searched_ix, &correct)| {
+                correct.distance(hrc.get_key(searched_ix).unwrap()) == 0
+            })
             .count();
         let recall = num_correct as f64 / NUM_SEARCH_QUERRIES as f64;
         let seconds_per_query = (end_time - start_time)

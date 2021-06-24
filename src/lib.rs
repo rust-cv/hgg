@@ -117,8 +117,10 @@ impl<K, V> Hrc<K, V>
 where
     K: MetricPoint + Clone,
 {
-    /// Performs a search to the query key using greedy search.
-    pub fn search(&self, query: &K) -> Option<usize> {
+    /// Searches for the nearest neighbor greedily.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn search(&self, query: &K) -> Option<(usize, u32)> {
         if self.is_empty() {
             None
         } else {
@@ -127,7 +129,9 @@ where
     }
 
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
-    pub fn search_from(&self, from: usize, query: &K) -> usize {
+    ///
+    /// Returns `(node, distance)`.
+    pub fn search_from(&self, from: usize, query: &K) -> (usize, u32) {
         let mut best_node = from;
         let mut best_distance = query.distance(&self.zero[from].key);
 
@@ -143,7 +147,7 @@ where
                 break;
             }
         }
-        best_node
+        (best_node, best_distance)
     }
 
     /// Finds the knn greedily from a starting node `from`.
@@ -155,9 +159,9 @@ where
             "the number of nearest neighbors queried MUST be at least 1"
         );
         // Perform a greedy search first to save time.
-        let from = self.search_from(from, query);
+        let (from, from_distance) = self.search_from(from, query);
         // Contains the index and the distance as a pair.
-        let mut bests = vec![(from, query.distance(&self.zero[from].key), false)];
+        let mut bests = vec![(from, from_distance, false)];
 
         loop {
             if let Some((previous_node, _, searched)) =
@@ -201,41 +205,29 @@ where
         }
     }
 
-    // /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
-    // /// that it traveled to reach the destination.
-    // pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
-    //     let mut queue = self
-    //         .neighbors(from)
-    //         .map(|neighbor| (from, neighbor))
-    //         .collect_vec();
-    //     let mut path = vec![from];
-    //     let mut best_distance = query.distance(&self.zero[from].key);
+    /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
+    /// that it traveled to reach the destination.
+    pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
+        let mut best_node = from;
+        let mut best_distance = query.distance(&self.zero[from].key);
+        let mut path = vec![from];
 
-    //     while let Some((previous_node, search_node)) = queue.pop() {
-    //         let distance = query.distance(&self.zero[search_node].key);
-    //         if distance < best_distance {
-    //             best_distance = distance;
-    //             // Find the position in the path where the previous node is at.
-    //             let path_position = path
-    //                 .iter()
-    //                 .enumerate()
-    //                 .rfind(|&(_, &node)| node == previous_node)
-    //                 .unwrap()
-    //                 .0;
-    //             // Remove all nodes after this node's previous node (erasing any alternate paths we took).
-    //             path.resize_with(path_position + 1, || panic!("this cannot happen, as we cant find something beyond the end of the vector"));
-    //             // Add this node (now the newest in the path.)
-    //             path.push(search_node);
-    //             // Add this nodes neighbors to the queue, making the previous node this node.
-    //             queue.extend(
-    //                 self.neighbors(search_node)
-    //                     .map(|neighbor| (search_node, neighbor)),
-    //             );
-    //         }
-    //     }
+        while let Some((neighbor_node, distance)) = self
+            .neighbor_keys(best_node)
+            .map(|(neighbor_key, neighbor_node)| (neighbor_node, query.distance(neighbor_key)))
+            .min_by_key(|&(_, distance)| distance)
+        {
+            if distance < best_distance {
+                best_node = neighbor_node;
+                best_distance = distance;
+                path.push(best_node);
+            } else {
+                break;
+            }
+        }
 
-    //     path
-    // }
+        path
+    }
 
     /// Insert a (key, value) pair.
     ///
@@ -260,9 +252,16 @@ where
         // Search for the nearest neighbors.
         let knn = self.search_knn_from(0, &key, quality);
 
-        for &(nn, _, _) in &knn {
-            self.optimize_connection(nn, new_node);
+        // Connect it to its nearest neighbor (or optimizing will continue indefinitely).
+        self.add_edge(knn[0].0, new_node);
+
+        // Optimize the connection between the nearest neighbors (aside from the most nearest).
+        for &(nn, _, _) in &knn[1..] {
+            self.optimize_connection(nn, new_node, quality);
         }
+
+        // Optimize the connection to the new node from the root.
+        self.optimize_connection_directed(0, new_node, quality);
 
         new_node
     }
@@ -272,26 +271,76 @@ where
         if self.zero.len() >= 2 {
             // First, we want to find `quality` nearest neighbors to the key.
             let knn = self.search_knn_from(0, key, quality);
-            // Next, we want to ensure that if we encounter a situation in which we cannot search from
-            // a nearer nearest neighbor to the nearest neighbor that we make that connection.
-            for &(nn, _, _) in &knn[1..] {
-                // Perform this search on the non-nearest neighbor.
-                let found = self.search_from(nn, key);
-                // If found is not the nearest neighbor, make sure that there is a connection.
-                if found != knn[0].0 {
-                    self.add_edge_dedup(knn[0].0, found);
-                };
-            }
+            // Make sure that there is a greedy search path from the root node to the nearest neighbor.
+            self.optimize_connection_directed(0, knn[0].0, quality);
         }
     }
 
-    /// Optimizes the connection between two nodes to ensure a greedy search path is available in both directions.
-    pub fn optimize_connection(&mut self, a: usize, b: usize) {
-        // Search from a to b.
-        let found = self.search_from(a, &self.zero[b].key);
-        // If we didn't reach b, connect the found node to b.
-        if found != b {
-            self.add_edge_dedup(found, b);
+    /// Optimizes the connection between two nodes to ensure the optimal greedy search path is available in both directions.
+    pub fn optimize_connection(&mut self, a: usize, b: usize, quality: usize) {
+        self.optimize_connection_directed(a, b, quality);
+        self.optimize_connection_directed(b, a, quality);
+    }
+
+    /// Ensures that the optimal greedy path exists from one node to another node (this is only true in one direction).
+    pub fn optimize_connection_directed(&mut self, from: usize, to: usize, quality: usize) {
+        // Search towards the target greedily.
+        let (mut from, mut from_distance) = self.search_from(from, &self.zero[to].key);
+        // This loop will gradually break through local minima using the nearest neighbor possible repeatedly
+        // until a greedy search path is established.
+        'outer: loop {
+            // Check if we reached the target.
+            if from == to {
+                // If we reached the target, then no more optimization is necessary, so return.
+                return;
+            }
+
+            // It is possible that we found a node which is colocated with the destination node.
+            if from_distance == 0 {
+                // In this case, we should only make sure that there is an edge to the destination node
+                // and then we are done.
+                self.add_edge_dedup(from, to);
+                return;
+            }
+
+            // In any other case, we have hit a local (but not global) minima.
+            // Our goal is to find the nearest neighbor which can break through the local minima.
+            // This process will be tried with exponentially more nearest neighbors until
+            // we find the nearest neighbor that can break through the minima.
+            // We start with a specific quality so that we are more likely to get the true nearest neighbors
+            // than if we just started with 2.
+            for quality in core::iter::successors(Some(quality), |&quality| {
+                let next = quality.saturating_mul(2);
+                if next == usize::MAX {
+                    None
+                } else {
+                    Some(next)
+                }
+            }) {
+                // Start by finding the nearest neighbors to the local minima starting at itself.
+                let knn = self.search_knn_from(from, &self.zero[from].key, quality);
+                // Go through the nearest neighbors in order from best to worst.
+                for &(nn, _, _) in &knn[1..] {
+                    // Compute the distance to the target from the nn.
+                    let nn_distance = self.distance(nn, to);
+                    // Check if this node is closer to the target than `from`.
+                    if nn_distance < from_distance {
+                        // In this case, a greedy search to this node would get closer to the target,
+                        // so add an edge to this node.
+                        self.add_edge(from, nn);
+                        // Then we need to perform a greedy search towards the target from this node.
+                        // This will become the new node for the next round of the loop.
+                        let (new_from, new_from_distance) =
+                            self.search_from(nn, &self.zero[to].key);
+                        from = new_from;
+                        from_distance = new_from_distance;
+                        // Continue the outer loop to iteratively move towards the target.
+                        continue 'outer;
+                    }
+                }
+            }
+            // If we get to this point, there is a bug because we have searched the entire graph.
+            unreachable!("searched entire graph and could not find node; disconnected graph segment must be present");
         }
     }
 
@@ -299,34 +348,30 @@ where
     ///
     /// This is useful to prune unecessary connections in the graph.
     pub fn optimize_node(&mut self, node: usize, quality: usize) {
-        let neighbors = self.neighbors(node).collect_vec();
+        // This wont work if we only have 1 node.
+        if self.len() < 2 {
+            return;
+        }
 
-        for neighbor in neighbors {
+        // Remove the node's neighbors.
+        for neighbor in self.neighbors(node).collect_vec() {
             self.remove_edge(node, neighbor);
         }
 
         // Search for the nearest neighbors.
-        let knn = self.search_knn_from(
-            if node == 0 {
-                if self.len() == 1 {
-                    return;
-                } else {
-                    1
-                }
-            } else {
-                0
-            },
-            &self.zero[node].key,
-            quality,
-        );
+        let knn =
+            self.search_knn_from(if node == 0 { 1 } else { 0 }, &self.zero[node].key, quality);
 
-        for (nn, _, _) in knn {
-            // Search for the new node from the nearest neighbor, connecting the found node with the new_node.
-            let found = self.search_from(nn, &self.zero[node].key);
-            if found != node {
-                self.add_edge_dedup(found, node);
-            }
+        // Connect it to its nearest neighbor (or optimizing will continue indefinitely).
+        self.add_edge(knn[0].0, node);
+
+        // Optimize the connection between the nearest neighbors (aside from the most nearest).
+        for &(nn, _, _) in &knn {
+            self.optimize_connection(nn, node, quality);
         }
+
+        // Optimize the connection to the new node from the root.
+        self.optimize_connection_directed(0, node, quality);
     }
 
     /// Globally optimizes the graph with the given quality level.
