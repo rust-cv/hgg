@@ -169,19 +169,18 @@ where
             {
                 // Set this as searched (we are searching it now).
                 *searched = true;
-                // Erase the reference to the search node (to avoid lifetime & borrowing issues);
+                // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = *previous_node;
 
                 for (search_key, search_node) in self.neighbor_keys(previous_node) {
+                    // Make sure that we don't have a copy of this node already or we will get duplicates.
+                    if bests.iter().any(|&(node, _, _)| search_node == node) {
+                        continue;
+                    }
                     // Compute the distance from the query.
                     let distance = query.distance(search_key);
                     // If we dont have enough yet, add it.
                     if bests.len() < num {
-                        // However, make sure that we don't have a copy of this node already.
-                        // Duplicates can form at this stage since they don't have to be better than current worst.
-                        if bests.iter().any(|&(node, _, _)| search_node == node) {
-                            continue;
-                        }
                         bests.insert(
                             bests.partition_point(|&(_, best_distance, _)| {
                                 best_distance <= distance
@@ -244,8 +243,21 @@ where
             edges: vec![],
         });
 
-        // Connect the node to the graph.
-        self.connect(new_node, quality);
+        // Find knn.
+        let knn = self.search_knn_from(0, &self.zero[new_node].key, quality);
+
+        // Connect the nearest neighbor.
+        self.add_edge(knn[0].0, new_node);
+
+        // Optimize the graph to each of the nearest neighbors.
+        for &(nn, _, _) in &knn[1..] {
+            self.optimize_connection(nn, new_node, quality);
+        }
+
+        // Reinsert the knn.
+        for &(nn, _, _) in &knn {
+            self.reinsert(nn, quality);
+        }
 
         new_node
     }
@@ -255,39 +267,32 @@ where
     /// This is useful to prune unecessary connections in the graph.
     pub fn reinsert(&mut self, node: usize, quality: usize) {
         // This wont work if we only have 1 node.
-        if self.len() < 2 {
+        if self.len() == 1 {
             return;
         }
 
-        // Disconnect the node from the graph.
-        self.disconnect(node);
-        // Connect the node to the graph.
-        self.connect(node, quality);
+        // Disconnect the node from the graph, keeping track of its old neighbors.
+        // We need to do this to avoid splitting the graph into disconnected graphs.
+        let neighbors = self.disconnect(node);
+        // Make sure each neighbor can connect.
+        for neighbor in neighbors {
+            let knn = self.search_knn_from(neighbor, &self.zero[node].key, quality);
+            let has_node = knn.iter().any(|&(nn, _, _)| nn == node);
+            if !has_node {
+                // Must be dedup because it could be many (quality) colocated nodes.
+                self.add_edge_dedup(node, knn[0].0);
+            }
+            self.optimize_connection(neighbor, node, quality);
+        }
     }
 
     /// Internal function for disconnecting a node from the graph.
-    fn disconnect(&mut self, node: usize) {
-        for neighbor in self.neighbors(node).collect_vec() {
+    fn disconnect(&mut self, node: usize) -> Vec<usize> {
+        let neighbors = self.neighbors(node).collect_vec();
+        for &neighbor in &neighbors {
             self.remove_edge(node, neighbor);
         }
-    }
-
-    /// Internal function for adding a disconnected node.
-    fn connect(&mut self, node: usize, quality: usize) {
-        // Search for the nearest neighbors.
-        let knn =
-            self.search_knn_from(if node == 0 { 1 } else { 0 }, &self.zero[node].key, quality);
-
-        // Connect it to its nearest neighbor (or optimizing will continue indefinitely).
-        self.add_edge(knn[0].0, node);
-
-        // Optimize the connection between the nearest neighbors (aside from the most nearest).
-        for &(nn, _, _) in &knn {
-            self.optimize_connection(nn, node, quality);
-        }
-
-        // Optimize the connection to the new node from the root.
-        self.optimize_connection_directed(0, node, quality);
+        neighbors
     }
 
     /// Trains the HRC by making connections so that the nearest neighbors to the given key can be found.
@@ -296,35 +301,69 @@ where
             // First, we want to find `quality` nearest neighbors to the key.
             let knn = self.search_knn_from(0, key, quality);
             // Make sure that there is a greedy search path from the root node to the nearest neighbor.
-            self.optimize_connection_directed(0, knn[0].0, quality);
+            // We set the termination distance at the nearest neighbor's distance.
+            self.optimize_target_directed(0, knn[0].1, key, quality);
         }
     }
 
     /// Optimizes the connection between two nodes to ensure the optimal greedy search path is available in both directions.
+    ///
+    /// This works even if the two nodes exist in totally disconnected graphs.
     pub fn optimize_connection(&mut self, a: usize, b: usize, quality: usize) {
-        self.optimize_connection_directed(a, b, quality);
-        self.optimize_connection_directed(b, a, quality);
+        match (
+            self.optimize_connection_directed(a, b, quality),
+            self.optimize_connection_directed(b, a, quality),
+        ) {
+            (Some(opti_a), Some(opti_b)) => self.add_edge(opti_a, opti_b),
+            (None, None) => {}
+            _ => {
+                unreachable!(
+                    "this case can only occur if there is a directed edge, which shouldn't exist"
+                )
+            }
+        }
     }
 
-    /// Ensures that the optimal greedy path exists from one node to another node (this is only true in one direction).
-    pub fn optimize_connection_directed(&mut self, from: usize, to: usize, quality: usize) {
+    pub fn optimize_connection_directed(
+        &mut self,
+        from: usize,
+        to: usize,
+        quality: usize,
+    ) -> Option<usize> {
+        let key = self.zero[to].key.clone();
+        let found = self.optimize_target_directed(from, 0, &key, quality);
+        if found != to {
+            if self.distance(found, to) == 0 {
+                self.add_edge_dedup(found, to);
+                None
+            } else {
+                Some(found)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Ensures that the optimal greedy path exists towards a specific key from a specific node.
+    ///
+    /// Will terminate when a distance equal to or better than `to_distance` is reached.
+    ///
+    /// Returns the termination node.
+    pub fn optimize_target_directed(
+        &mut self,
+        from: usize,
+        min_distance: u32,
+        target: &K,
+        quality: usize,
+    ) -> usize {
         // Search towards the target greedily.
-        let (mut from, mut from_distance) = self.search_from(from, &self.zero[to].key);
+        let (mut from, mut from_distance) = self.search_from(from, target);
         // This loop will gradually break through local minima using the nearest neighbor possible repeatedly
         // until a greedy search path is established.
         'outer: loop {
-            // Check if we reached the target.
-            if from == to {
-                // If we reached the target, then no more optimization is necessary, so return.
-                return;
-            }
-
-            // It is possible that we found a node which is colocated with the destination node.
-            if from_distance == 0 {
-                // In this case, we should only make sure that there is an edge to the destination node
-                // and then we are done.
-                self.add_edge_dedup(from, to);
-                return;
+            // Check if we matched or exceeded expectations.
+            if from_distance <= min_distance {
+                return from;
             }
 
             // In any other case, we have hit a local (but not global) minima.
@@ -334,11 +373,10 @@ where
             // We start with a specific quality so that we are more likely to get the true nearest neighbors
             // than if we just started with 2.
             for quality in core::iter::successors(Some(quality), |&quality| {
-                let next = quality.saturating_mul(2);
-                if next == usize::MAX {
+                if quality >= self.len() {
                     None
                 } else {
-                    Some(next)
+                    Some(quality.saturating_mul(2))
                 }
             }) {
                 // Start by finding the nearest neighbors to the local minima starting at itself.
@@ -346,7 +384,7 @@ where
                 // Go through the nearest neighbors in order from best to worst.
                 for &(nn, _, _) in &knn[1..] {
                     // Compute the distance to the target from the nn.
-                    let nn_distance = self.distance(nn, to);
+                    let nn_distance = self.zero[nn].key.distance(target);
                     // Check if this node is closer to the target than `from`.
                     if nn_distance < from_distance {
                         // In this case, a greedy search to this node would get closer to the target,
@@ -354,8 +392,7 @@ where
                         self.add_edge(from, nn);
                         // Then we need to perform a greedy search towards the target from this node.
                         // This will become the new node for the next round of the loop.
-                        let (new_from, new_from_distance) =
-                            self.search_from(nn, &self.zero[to].key);
+                        let (new_from, new_from_distance) = self.search_from(nn, target);
                         from = new_from;
                         from_distance = new_from_distance;
                         // Continue the outer loop to iteratively move towards the target.
@@ -363,8 +400,8 @@ where
                     }
                 }
             }
-            // If we get to this point, there is a bug because we have searched the entire graph.
-            unreachable!("searched entire graph and could not find node; disconnected graph segment must be present");
+            // If we get to this point, we searched the entire graph and there was no path.
+            return from;
         }
     }
 
