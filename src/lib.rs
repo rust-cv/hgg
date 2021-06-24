@@ -102,6 +102,15 @@ impl<K, V> Hrc<K, V>
 where
     K: MetricPoint + Clone,
 {
+    /// Performs a search to the query key using greedy search.
+    pub fn search(&self, query: &K) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.search_from(0, query))
+        }
+    }
+
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     pub fn search_from(&self, from: usize, query: &K) -> usize {
         let mut queue = self.zero[from].edges.clone();
@@ -120,13 +129,43 @@ where
         best_node
     }
 
-    /// Performs a search to the query key using greedy search.
-    pub fn search(&self, query: &K) -> Option<usize> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self.search_from(0, query))
+    /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
+    /// that it traveled to reach the destination.
+    pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
+        let mut queue = self.zero[from]
+            .edges
+            .iter()
+            .map(|&neighbor| (from, neighbor))
+            .collect_vec();
+        let mut path = vec![from];
+        let mut best_distance = query.distance(&self.zero[from].key);
+
+        while let Some((previous_node, search_node)) = queue.pop() {
+            let distance = query.distance(&self.zero[search_node].key);
+            if distance < best_distance {
+                best_distance = distance;
+                // Find the position in the path where the previous node is at.
+                let path_position = path
+                    .iter()
+                    .enumerate()
+                    .rfind(|&(_, &node)| node == previous_node)
+                    .unwrap()
+                    .0;
+                // Remove all nodes after this node's previous node (erasing any alternate paths we took).
+                path.resize_with(path_position + 1, || panic!("this cannot happen, as we cant find something beyond the end of the vector"));
+                // Add this node (now the newest in the path.)
+                path.push(search_node);
+                // Add this nodes neighbors to the queue, making the previous node this node.
+                queue.extend(
+                    self.zero[search_node]
+                        .edges
+                        .iter()
+                        .map(|&neighbor| (search_node, neighbor)),
+                );
+            }
         }
+
+        path
     }
 
     /// Finds the knn greedily from a starting node `from`.
