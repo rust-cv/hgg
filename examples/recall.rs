@@ -7,11 +7,11 @@ use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 18;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
-const NUM_TRAINING_PAIRS: usize = 1 << 20;
+const NUM_TRAINING_PAIRS: usize = 1 << 21;
 const NUM_TRAINING_LOOPS: usize = 3;
-const HIGHEST_KNN: usize = 16;
+const HIGHEST_KNN: usize = 32;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -134,6 +134,7 @@ fn main() {
                     queries_per_second,
                 })
                 .expect("failed to serialize record");
+            csv_out.flush().expect("failed to flush record");
             eprintln!("finished size {} with knn {}", 1 << pow, knn);
         }
     }
