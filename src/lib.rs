@@ -260,7 +260,7 @@ where
     /// Removes a node from the graph and then reinserts it with the given quality.
     ///
     /// This is useful to prune unecessary connections in the graph.
-    pub fn reinsert(&mut self, node: usize, quality: usize) {
+    pub fn reinsert(&mut self, node: usize) {
         // This wont work if we only have 1 node.
         if self.len() == 1 {
             return;
@@ -269,15 +269,12 @@ where
         // Disconnect the node from the graph, keeping track of its old neighbors.
         // We need to do this to avoid splitting the graph into disconnected graphs.
         let neighbors = self.disconnect(node);
-        // Make sure each neighbor can connect.
+        // Make sure each neighbor can connect greedily.
         for neighbor in neighbors {
-            let knn = self.search_knn_from(neighbor, &self.zero[node].key, quality);
-            let has_node = knn.iter().any(|&(nn, _, _)| nn == node);
-            if !has_node {
-                // Must be dedup because it could be many (quality) colocated nodes.
-                self.add_edge_dedup(node, knn[0].0);
+            let (nn, _) = self.search_from(neighbor, &self.zero[node].key);
+            if nn != node {
+                self.add_edge_dedup(nn, node);
             }
-            self.optimize_connection(neighbor, node, quality);
         }
     }
 
@@ -403,9 +400,9 @@ where
     /// Globally trims as many edges from the graph as possible.
     ///
     /// Increasing the quality may result in less edges.
-    pub fn trim(&mut self, quality: usize) {
+    pub fn trim(&mut self) {
         for node in 0..self.len() {
-            self.reinsert(node, quality);
+            self.reinsert(node);
         }
     }
 

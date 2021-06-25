@@ -80,7 +80,7 @@ fn main() {
         for train_loop_num in 0..NUM_TRAINING_LOOPS {
             eprintln!("Training loop {}", train_loop_num);
             eprintln!("Trimming HRC size {}", 1 << pow);
-            hrc.trim(16);
+            hrc.trim();
 
             eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
             for (a, b) in (0..NUM_TRAINING_PAIRS)

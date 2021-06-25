@@ -327,13 +327,14 @@ mod stats {
 
     #[test]
     fn random_insertion_stats() {
+        const NUM_TRAINING_PAIRS: usize = 1 << 16;
         let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new().max_cluster_len(5);
 
         // Use a PRNG with good statistical properties for generating 64-bit numbers.
-        let rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
+        let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
         // Generate random keys.
-        let keys: Vec<Hamming<Bits256>> = rng
+        let keys: Vec<Hamming<Bits256>> = (&mut rng)
             .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
             .map(Bits256)
             .map(Hamming)
@@ -349,14 +350,25 @@ mod stats {
             hrc.insert(key, (), 32);
         }
 
+        eprintln!("Trimming graph");
+        hrc.trim();
+
+        eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
+        for (a, b) in (0..NUM_TRAINING_PAIRS)
+            .map(|_| (rng.gen_range(0..keys.len()), rng.gen_range(0..keys.len())))
+        {
+            hrc.optimize_connection(a, b, 32);
+        }
+        eprintln!("Histogram: {:?}", hrc.histogram());
+
         for (ix, key) in keys.iter().enumerate() {
             if ix % 100 == 0 {
                 eprintln!("Searching {}", ix);
             }
             // Search each key.
-            let neighbor = hrc.search(key).unwrap();
+            let (_, distance) = hrc.search(key).unwrap();
             // Make sure that the best result is this key.
-            assert_eq!(hrc.get_key(neighbor).unwrap(), key);
+            assert_eq!(distance, 0);
         }
 
         // for layer in &hrc.layers {
