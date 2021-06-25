@@ -400,8 +400,10 @@ where
         }
     }
 
-    /// Globally optimizes the graph with the given quality level.
-    pub fn optimize(&mut self, quality: usize) {
+    /// Globally trims as many edges from the graph as possible.
+    ///
+    /// Increasing the quality may result in less edges.
+    pub fn trim(&mut self, quality: usize) {
         for node in 0..self.len() {
             self.reinsert(node, quality);
         }
