@@ -254,11 +254,6 @@ where
             self.optimize_connection(nn, new_node, quality);
         }
 
-        // Reinsert the knn.
-        for &(nn, _, _) in &knn {
-            self.reinsert(nn, quality);
-        }
-
         new_node
     }
 

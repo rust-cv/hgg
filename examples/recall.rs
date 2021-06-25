@@ -1,13 +1,14 @@
 extern crate std;
 
 use hrc::Hrc;
+use rand::Rng;
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 10;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 14;
 const NUM_SEARCH_QUERRIES: usize = 1 << 8;
-const NUM_TRAINING_STRINGS: usize = 1 << 12;
+const NUM_TRAINING_STRINGS: usize = 1 << 14;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -94,15 +95,19 @@ fn main() {
         // hrc.optimize(32);
         // hrc.optimize(32);
 
-        eprintln!("Training with {} strings", NUM_TRAINING_STRINGS);
-        for train_key in query_space {
-            hrc.train(train_key, 1024);
-        }
-        for train_key in query_space {
-            hrc.train(train_key, 1024);
-        }
-        for train_key in query_space {
-            hrc.train(train_key, 1024);
+        // eprintln!("Training with {} strings", NUM_TRAINING_STRINGS);
+        // for train_key in &training {
+        //     hrc.train(train_key, 32);
+        // }
+
+        eprintln!("Training with {} random node pairs", NUM_TRAINING_STRINGS);
+        for (a, b) in (0..NUM_TRAINING_STRINGS).map(|_| {
+            (
+                rand::thread_rng().gen_range(0..1 << pow),
+                rand::thread_rng().gen_range(0..1 << pow),
+            )
+        }) {
+            hrc.optimize_connection(a, b, 32);
         }
 
         eprintln!("Histogram: {:?}", hrc.histogram());
@@ -122,8 +127,8 @@ fn main() {
         let start_time = Instant::now();
         let search_bests: Vec<usize> = query_space
             .iter()
-            //.map(|query| hrc.search_knn_from(0, query, 32)[0].0)
-            .map(|query| hrc.search_from(0, query).0)
+            .map(|query| hrc.search_knn_from(0, query, 32)[0].0)
+            //.map(|query| hrc.search_from(0, query).0)
             .collect();
         let end_time = Instant::now();
         let num_correct = search_bests
