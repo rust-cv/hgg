@@ -297,14 +297,16 @@ where
         neighbors
     }
 
-    /// Trains the HRC by making connections so that the nearest neighbors to the given key can be found.
+    /// Trains by creating optimized greedy search paths from `quality` nearest neighbors towards the key.
     pub fn train(&mut self, key: &K, quality: usize) {
         if self.zero.len() >= 2 {
             // First, we want to find `quality` nearest neighbors to the key.
             let knn = self.search_knn_from(0, key, quality);
-            // Make sure that there is a greedy search path from the root node to the nearest neighbor.
-            // We set the termination distance at the nearest neighbor's distance.
-            self.optimize_target_directed(0, knn[0].1, key);
+            // Make sure that there is a greedy search path from all found nearest neighbors to the key.
+            // We set the termination distance at the nearest neighbor's distance (the closest known distance).
+            for &(nn, _, _) in &knn {
+                self.optimize_target_directed(nn, knn[0].1, key);
+            }
         }
     }
 
