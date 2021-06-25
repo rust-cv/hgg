@@ -357,7 +357,7 @@ mod stats {
         for (a, b) in (0..NUM_TRAINING_PAIRS)
             .map(|_| (rng.gen_range(0..keys.len()), rng.gen_range(0..keys.len())))
         {
-            hrc.optimize_connection(a, b, 32);
+            hrc.optimize_connection(a, b);
         }
         eprintln!("Histogram: {:?}", hrc.histogram());
 

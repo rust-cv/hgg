@@ -86,7 +86,7 @@ fn main() {
             for (a, b) in (0..NUM_TRAINING_PAIRS)
                 .map(|_| (rng.gen_range(0..1 << pow), rng.gen_range(0..1 << pow)))
             {
-                hrc.optimize_connection(a, b, 32);
+                hrc.optimize_connection(a, b);
             }
             eprintln!("Histogram: {:?}", hrc.histogram());
         }

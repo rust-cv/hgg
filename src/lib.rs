@@ -20,12 +20,17 @@ struct HrcZeroNode<K, V> {
     key: K,
     value: V,
     edges: Vec<(K, usize)>,
+    next_freshest: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hrc<K, V> {
     /// The zero layer.
     zero: Vec<HrcZeroNode<K, V>>,
+    /// The node which has been cleaned up/inserted longest ago.
+    stalest: usize,
+    /// The node which has been cleaned up/inserted most recently.
+    freshest: usize,
     /// Clusters with more items than this are split apart.
     max_cluster_len: usize,
 }
@@ -35,6 +40,8 @@ impl<K, V> Hrc<K, V> {
     pub fn new() -> Self {
         Self {
             zero: vec![],
+            stalest: 0,
+            freshest: 0,
             max_cluster_len: 1024,
         }
     }
@@ -237,11 +244,14 @@ where
     pub fn insert(&mut self, key: K, value: V, quality: usize) -> usize {
         // Add the node (it will be added this way regardless).
         let new_node = self.zero.len();
+        // Create the node. This is now the freshest node.
         self.zero.push(HrcZeroNode {
             key,
             value,
             edges: vec![],
+            next_freshest: self.freshest,
         });
+        self.freshest = new_node;
 
         // Find knn.
         let knn = self.search_knn_from(0, &self.zero[new_node].key, quality);
@@ -251,7 +261,7 @@ where
 
         // Optimize the graph to each of the nearest neighbors.
         for &(nn, _, _) in &knn[1..] {
-            self.optimize_connection(nn, new_node, quality);
+            self.optimize_connection(nn, new_node);
         }
 
         new_node
@@ -294,17 +304,17 @@ where
             let knn = self.search_knn_from(0, key, quality);
             // Make sure that there is a greedy search path from the root node to the nearest neighbor.
             // We set the termination distance at the nearest neighbor's distance.
-            self.optimize_target_directed(0, knn[0].1, key, quality);
+            self.optimize_target_directed(0, knn[0].1, key);
         }
     }
 
     /// Optimizes the connection between two nodes to ensure the optimal greedy search path is available in both directions.
     ///
     /// This works even if the two nodes exist in totally disconnected graphs.
-    pub fn optimize_connection(&mut self, a: usize, b: usize, quality: usize) {
+    pub fn optimize_connection(&mut self, a: usize, b: usize) {
         match (
-            self.optimize_connection_directed(a, b, quality),
-            self.optimize_connection_directed(b, a, quality),
+            self.optimize_connection_directed(a, b),
+            self.optimize_connection_directed(b, a),
         ) {
             (Some(opti_a), Some(opti_b)) => self.add_edge(opti_a, opti_b),
             (None, None) => {}
@@ -316,14 +326,9 @@ where
         }
     }
 
-    pub fn optimize_connection_directed(
-        &mut self,
-        from: usize,
-        to: usize,
-        quality: usize,
-    ) -> Option<usize> {
+    pub fn optimize_connection_directed(&mut self, from: usize, to: usize) -> Option<usize> {
         let key = self.zero[to].key.clone();
-        let found = self.optimize_target_directed(from, 0, &key, quality);
+        let found = self.optimize_target_directed(from, 0, &key);
         if found != to {
             if self.distance(found, to) == 0 {
                 self.add_edge_dedup(found, to);
@@ -346,7 +351,6 @@ where
         from: usize,
         min_distance: u32,
         target: &K,
-        quality: usize,
     ) -> usize {
         // Search towards the target greedily.
         let (mut from, mut from_distance) = self.search_from(from, target);
@@ -364,13 +368,16 @@ where
             // we find the nearest neighbor that can break through the minima.
             // We start with a specific quality so that we are more likely to get the true nearest neighbors
             // than if we just started with 2.
-            for quality in core::iter::successors(Some(quality), |&quality| {
-                if quality >= self.len() {
-                    None
-                } else {
-                    Some(quality.saturating_mul(2))
-                }
-            }) {
+            for quality in core::iter::successors(
+                Some(self.zero[from].edges.len().saturating_mul(2)),
+                |&quality| {
+                    if quality >= self.len() {
+                        None
+                    } else {
+                        Some(quality.saturating_mul(2))
+                    }
+                },
+            ) {
                 // Start by finding the nearest neighbors to the local minima starting at itself.
                 let knn = self.search_knn_from(from, &self.zero[from].key, quality);
                 // Go through the nearest neighbors in order from best to worst.
