@@ -7,9 +7,9 @@ use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 14;
-const NUM_SEARCH_QUERRIES: usize = 1 << 16;
-const NUM_TRAINING_PAIRS: usize = 1 << 16;
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 18;
+const NUM_SEARCH_QUERRIES: usize = 1 << 18;
+const NUM_TRAINING_PAIRS: usize = 1 << 20;
 const NUM_TRAINING_LOOPS: usize = 3;
 const HIGHEST_KNN: usize = 16;
 
@@ -74,18 +74,13 @@ fn main() {
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC size {}", 1 << pow);
         for &key in search_space {
-            hrc.insert(key, (), 32);
+            hrc.insert(key, (), 16);
         }
 
         for train_loop_num in 0..NUM_TRAINING_LOOPS {
             eprintln!("Training loop {}", train_loop_num);
             eprintln!("Trimming HRC size {}", 1 << pow);
-            hrc.trim(32);
-
-            // eprintln!("Training with {} strings", NUM_TRAINING_STRINGS);
-            // for train_key in &training {
-            //     hrc.train(train_key, 32);
-            // }
+            hrc.trim(16);
 
             eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
             for (a, b) in (0..NUM_TRAINING_PAIRS)
