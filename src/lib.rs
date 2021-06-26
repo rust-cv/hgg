@@ -20,15 +20,14 @@ struct HrcZeroNode<K, V> {
     key: K,
     value: V,
     edges: Vec<(K, usize)>,
-    next_freshest: usize,
+    /// Forms a linked list through the nodes that creates the freshening order.
+    next: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hrc<K, V> {
     /// The zero layer.
     zero: Vec<HrcZeroNode<K, V>>,
-    /// The node which has been cleaned up/inserted longest ago.
-    stalest: usize,
     /// The node which has been cleaned up/inserted most recently.
     freshest: usize,
     /// Clusters with more items than this are split apart.
@@ -40,7 +39,6 @@ impl<K, V> Hrc<K, V> {
     pub fn new() -> Self {
         Self {
             zero: vec![],
-            stalest: 0,
             freshest: 0,
             max_cluster_len: 1024,
         }
@@ -211,6 +209,11 @@ where
         }
     }
 
+    /// Finds the knn of `node` greedily.
+    pub fn search_knn_of(&self, node: usize, num: usize) -> Vec<(usize, u32, bool)> {
+        self.search_knn_from(node, &self.zero[node].key, num)
+    }
+
     /// Performs a greedy search starting from node `from`. Keeps track of where it came from, and returns the path
     /// that it traveled to reach the destination.
     pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
@@ -244,13 +247,24 @@ where
     pub fn insert(&mut self, key: K, value: V, quality: usize) -> usize {
         // Add the node (it will be added this way regardless).
         let new_node = self.zero.len();
-        // Create the node. This is now the freshest node.
+        // Create the node.
+        // The current freshest node's `next` is the stalest node, which will subsequently become
+        // the freshest when freshened. If this is the only node, looking up the freshest node will fail.
+        // Due to that, we set this node's next to itself if its the only node.
         self.zero.push(HrcZeroNode {
             key,
             value,
             edges: vec![],
-            next_freshest: self.freshest,
+            next: if new_node == 0 {
+                0
+            } else {
+                self.zero[self.freshest].next
+            },
         });
+        // The previous freshest node should now be freshened right before this node, as this node is now fresher.
+        // Even if this is the only node, this will still work because this node still comes after itself in the freshening order.
+        self.zero[self.freshest].next = new_node;
+        // This is now the freshest node.
         self.freshest = new_node;
 
         // Find knn.
@@ -265,6 +279,29 @@ where
         }
 
         new_node
+    }
+
+    /// Freshens up the stalest node by pruning as many edges as reasonably possible from it.
+    /// This puts the node into a state where its local neighborhood is probably not optimized well,
+    /// and it might form a local minima for some path that passes nearby.
+    ///
+    /// If you run this function, it is recommended to run [`Hrc::optimize_connection`] on this node,
+    /// its neighbors, and other various nodes (can be random).
+    ///
+    /// Returns the freshened node or `None` if the HRC was empty.
+    pub fn freshen(&mut self) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            // The freshest node's next is the stalest node.
+            let node = self.zero[self.freshest].next;
+            // The linked list through the nodes remains the same, we only move the freshest forward by 1.
+            self.freshest = node;
+            // Reinsert the node to freshen it.
+            self.reinsert(node);
+            // Return the node.
+            Some(node)
+        }
     }
 
     /// Removes a node from the graph and then reinserts it with the given quality.
@@ -381,7 +418,7 @@ where
                 },
             ) {
                 // Start by finding the nearest neighbors to the local minima starting at itself.
-                let knn = self.search_knn_from(from, &self.zero[from].key, quality);
+                let knn = self.search_knn_of(from, quality);
                 // Go through the nearest neighbors in order from best to worst.
                 for &(nn, _, _) in &knn[1..] {
                     // Compute the distance to the target from the nn.

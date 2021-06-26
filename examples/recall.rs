@@ -9,9 +9,9 @@ use std::{io::Read, time::Instant};
 
 const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
-const NUM_TRAINING_PAIRS: usize = 1 << 21;
-const NUM_TRAINING_LOOPS: usize = 3;
 const HIGHEST_KNN: usize = 32;
+const FRESHENS_PER_INSERT: usize = 4;
+const TRAINING_PAIRS: usize = 64;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -73,24 +73,30 @@ fn main() {
         let query_space = &keys[1 << pow..(1 << pow) + NUM_SEARCH_QUERRIES];
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC size {}", 1 << pow);
+        let start_time = Instant::now();
         for &key in search_space {
-            hrc.insert(key, (), 16);
-        }
-
-        for train_loop_num in 0..NUM_TRAINING_LOOPS {
-            eprintln!("Training loop {}", train_loop_num);
-            eprintln!("Trimming HRC size {}", 1 << pow);
-            hrc.trim();
-
-            eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
-            for (a, b) in (0..NUM_TRAINING_PAIRS)
-                .map(|_| (rng.gen_range(0..1 << pow), rng.gen_range(0..1 << pow)))
-            {
-                hrc.optimize_connection(a, b);
+            // Insert the key.
+            let new_node = hrc.insert(key, (), 16);
+            // Train connections to the new key.
+            for _ in 0..TRAINING_PAIRS {
+                hrc.optimize_connection(new_node, rng.gen_range(0..hrc.len()));
             }
-            eprintln!("Histogram: {:?}", hrc.histogram());
+            // Freshen the graph.
+            for _ in 0..FRESHENS_PER_INSERT {
+                if let Some(node) = hrc.freshen() {
+                    for _ in 0..TRAINING_PAIRS {
+                        hrc.optimize_connection(node, rng.gen_range(0..hrc.len()));
+                    }
+                }
+            }
         }
+        let end_time = Instant::now();
+        eprintln!(
+            "Finished inserting. Speed was {} keys per second",
+            search_space.len() as f64 / (end_time - start_time).as_secs_f64()
+        );
 
+        eprintln!("Computing correct nearest neighbors for recall calculation");
         let correct_nearest: Vec<Hamming<Bits256>> = query_space
             .iter()
             .map(|query| {
@@ -101,6 +107,7 @@ fn main() {
                     .unwrap()
             })
             .collect();
+        eprintln!("Finished computing the correct nearest neighbors");
 
         for knn in 1..=HIGHEST_KNN {
             eprintln!("doing size {} with knn {}", 1 << pow, knn);
