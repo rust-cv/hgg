@@ -10,7 +10,7 @@ use std::{io::Read, time::Instant};
 const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
 const HIGHEST_KNN: usize = 32;
-const FRESHENS_PER_INSERT: usize = 4;
+const FRESHENS_PER_INSERT: usize = 2;
 const TRAINING_PAIRS: usize = 64;
 
 #[derive(Debug, Serialize)]
