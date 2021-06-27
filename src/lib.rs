@@ -13,6 +13,8 @@ pub use stats::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
+use num_traits::AsPrimitive;
 use space::MetricPoint;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,25 +26,40 @@ struct HrcZeroNode<K, V> {
     next: usize,
 }
 
+/// Collection for retrieving entries based on key proximity in a metric space.
+///
+/// Optional type parameter `D` can be set to a smaller unsigned integer (`u8`, `u16`, `u32`) ONLY
+/// if you know that the distance metric cannot overflow this unsigned integer. If it does, then
+/// you will have issues. `f32` metric sources can be safely used with `u32`, as only the lower
+/// 32 bits of the `u64` is utilized in that case, but `f64` CANNOT be used with anything smaller than `u64`.
+/// There is no advantage to using `u128` as the distance metric is produced as `u64`.
+/// This parameter DOES affect the performance in benchmarks, though the amount may vary between machines.
+/// Smaller integer types will yield better performance, but the difference will likely be less than 25%.
+/// On one machine, u64 -> u32 yielded 10-20% performance, but u32 -> u16 yielded less than 1%.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Hrc<K, V> {
+pub struct Hrc<K, V, D = u64> {
     /// The zero layer.
     zero: Vec<HrcZeroNode<K, V>>,
     /// The node which has been cleaned up/inserted most recently.
     freshest: usize,
     /// Clusters with more items than this are split apart.
     max_cluster_len: usize,
+    /// This allows a consistent number to be used for distance storage during usage.
+    _phantom: PhantomData<D>,
 }
 
-impl<K, V> Hrc<K, V> {
+impl<K, V, D> Hrc<K, V, D> {
     /// Creates a new [`Hrc`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
             zero: vec![],
             freshest: 0,
             max_cluster_len: 1024,
+            _phantom: PhantomData,
         }
     }
+
+    /// Changes the distance metric type.
 
     /// Sets the max number of items allowed in a cluster before it is split apart.
     pub fn max_cluster_len(self, max_cluster_len: usize) -> Self {
@@ -100,7 +117,7 @@ impl<K, V> Hrc<K, V> {
     }
 }
 
-impl<K, V> Hrc<K, V>
+impl<K, V, D> Hrc<K, V, D>
 where
     K: Clone,
 {
@@ -118,14 +135,16 @@ where
     }
 }
 
-impl<K, V> Hrc<K, V>
+impl<K, V, D> Hrc<K, V, D>
 where
     K: MetricPoint + Clone,
+    D: Copy + Ord + 'static,
+    u64: AsPrimitive<D>,
 {
     /// Searches for the nearest neighbor greedily.
     ///
     /// Returns `(node, distance)`.
-    pub fn search(&self, query: &K) -> Option<(usize, u32)> {
+    pub fn search(&self, query: &K) -> Option<(usize, D)> {
         if self.is_empty() {
             None
         } else {
@@ -136,13 +155,15 @@ where
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_from(&self, from: usize, query: &K) -> (usize, u32) {
+    pub fn search_from(&self, from: usize, query: &K) -> (usize, D) {
         let mut best_node = from;
-        let mut best_distance = query.distance(&self.zero[from].key);
+        let mut best_distance = query.distance(&self.zero[from].key).as_();
 
         while let Some((neighbor_node, distance)) = self
             .neighbor_keys(best_node)
-            .map(|(neighbor_key, neighbor_node)| (neighbor_node, query.distance(neighbor_key)))
+            .map(|(neighbor_key, neighbor_node)| {
+                (neighbor_node, query.distance(neighbor_key).as_())
+            })
             .min_by_key(|&(_, distance)| distance)
         {
             if distance < best_distance {
@@ -158,7 +179,7 @@ where
     /// Finds the knn greedily from a starting node `from`.
     ///
     /// Returns (node, distance, searched) pairs. `searched` will always be true, so you can ignore it.
-    pub fn search_knn_from(&self, from: usize, query: &K, num: usize) -> Vec<(usize, u32, bool)> {
+    pub fn search_knn_from(&self, from: usize, query: &K, num: usize) -> Vec<(usize, D, bool)> {
         assert!(
             num > 0,
             "the number of nearest neighbors queried MUST be at least 1"
@@ -183,7 +204,7 @@ where
                         continue;
                     }
                     // Compute the distance from the query.
-                    let distance = query.distance(search_key);
+                    let distance = query.distance(search_key).as_();
                     // If we dont have enough yet, add it.
                     if bests.len() < num {
                         bests.insert(
@@ -210,7 +231,7 @@ where
     }
 
     /// Finds the knn of `node` greedily.
-    pub fn search_knn_of(&self, node: usize, num: usize) -> Vec<(usize, u32, bool)> {
+    pub fn search_knn_of(&self, node: usize, num: usize) -> Vec<(usize, D, bool)> {
         self.search_knn_from(node, &self.zero[node].key, num)
     }
 
@@ -218,12 +239,14 @@ where
     /// that it traveled to reach the destination.
     pub fn search_from_path(&self, from: usize, query: &K) -> Vec<usize> {
         let mut best_node = from;
-        let mut best_distance = query.distance(&self.zero[from].key);
+        let mut best_distance = query.distance(&self.zero[from].key).as_();
         let mut path = vec![from];
 
         while let Some((neighbor_node, distance)) = self
             .neighbor_keys(best_node)
-            .map(|(neighbor_key, neighbor_node)| (neighbor_node, query.distance(neighbor_key)))
+            .map(|(neighbor_key, neighbor_node)| {
+                (neighbor_node, query.distance(neighbor_key).as_())
+            })
             .min_by_key(|&(_, distance)| distance)
         {
             if distance < best_distance {
@@ -355,11 +378,13 @@ where
             self.optimize_connection_directed(a, b),
             self.optimize_connection_directed(b, a),
         ) {
-            (Some(opti_a), Some(opti_b)) => self.add_edge(opti_a, opti_b),
+            (Some(_), Some(_)) => unreachable!(
+                "this case can only occur if the graph is disconnected, which is a fatal bug"
+            ),
             (None, None) => {}
             _ => {
                 unreachable!(
-                    "this case can only occur if there is a directed edge, which shouldn't exist"
+                    "this case can only occur if there is a directed edge, which is a fatal bug"
                 )
             }
         }
@@ -367,9 +392,9 @@ where
 
     pub fn optimize_connection_directed(&mut self, from: usize, to: usize) -> Option<usize> {
         let key = self.zero[to].key.clone();
-        let found = self.optimize_target_directed(from, 0, &key);
+        let found = self.optimize_target_directed(from, 0.as_(), &key);
         if found != to {
-            if self.distance(found, to) == 0 {
+            if self.distance(found, to) == 0.as_() {
                 self.add_edge_dedup(found, to);
                 None
             } else {
@@ -385,12 +410,7 @@ where
     /// Will terminate when a distance equal to or better than `to_distance` is reached.
     ///
     /// Returns the termination node.
-    pub fn optimize_target_directed(
-        &mut self,
-        from: usize,
-        min_distance: u32,
-        target: &K,
-    ) -> usize {
+    pub fn optimize_target_directed(&mut self, from: usize, min_distance: D, target: &K) -> usize {
         // Search towards the target greedily.
         let (mut from, mut from_distance) = self.search_from(from, target);
         // This loop will gradually break through local minima using the nearest neighbor possible repeatedly
@@ -422,7 +442,7 @@ where
                 // Go through the nearest neighbors in order from best to worst.
                 for &(nn, _, _) in &knn[1..] {
                     // Compute the distance to the target from the nn.
-                    let nn_distance = self.zero[nn].key.distance(target);
+                    let nn_distance = self.zero[nn].key.distance(target).as_();
                     // Check if this node is closer to the target than `from`.
                     if nn_distance < from_distance {
                         // In this case, a greedy search to this node would get closer to the target,
@@ -453,12 +473,12 @@ where
     }
 
     /// Computes the distance between two nodes.
-    pub fn distance(&self, a: usize, b: usize) -> u32 {
-        self.zero[a].key.distance(&self.zero[b].key)
+    pub fn distance(&self, a: usize, b: usize) -> D {
+        self.zero[a].key.distance(&self.zero[b].key).as_()
     }
 }
 
-impl<K, V> Default for Hrc<K, V> {
+impl<K, V, D> Default for Hrc<K, V, D> {
     fn default() -> Self {
         Self::new()
     }

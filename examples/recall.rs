@@ -52,7 +52,7 @@ fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
 }
 
 fn main() {
-    let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new().max_cluster_len(5);
+    let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
 
     // Generate random keys.
     let keys = retrieve_search_and_train();

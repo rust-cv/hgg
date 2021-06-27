@@ -10,13 +10,14 @@ default = ["stats"]
 stats = []
 
 [dependencies]
-space = { version = "0.11.0", default-features = false }
-itertools = { version = "0.10.0", default-features = false }
+space = { version = "0.12.0", default-features = false }
+itertools = { version = "0.10.1", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
 
 [dev-dependencies]
-space = { version = "0.11.0", default-features = false, features = ["simd-hamming"] }
-rand = "0.8.3"
+space = { version = "0.12.0", default-features = false, features = ["simd-hamming"] }
+rand = "0.8.4"
 rand_xoshiro = "0.6.0"
-itertools = { version = "0.10.0" }
+itertools = "0.10.1"
 csv = "1.1.6"
 serde = { version = "1.0.126", features = ["derive"] }
