@@ -76,16 +76,16 @@ fn main() {
         let start_time = Instant::now();
         for &key in search_space {
             // Insert the key.
-            let new_node = hrc.insert(key, (), 16);
+            let new_node = hrc.insert(0, key, (), 16);
             // Train connections to the new key.
             for _ in 0..TRAINING_PAIRS {
-                hrc.optimize_connection(new_node, rng.gen_range(0..hrc.len()));
+                hrc.optimize_connection(0, new_node, rng.gen_range(0..hrc.len()));
             }
             // Freshen the graph.
             for _ in 0..FRESHENS_PER_INSERT {
                 if let Some(node) = hrc.freshen() {
                     for _ in 0..TRAINING_PAIRS {
-                        hrc.optimize_connection(node, rng.gen_range(0..hrc.len()));
+                        hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
                     }
                 }
             }
@@ -114,7 +114,7 @@ fn main() {
             let start_time = Instant::now();
             let search_bests: Vec<usize> = query_space
                 .iter()
-                .map(|query| hrc.search_knn_from(0, query, knn)[0].0)
+                .map(|query| hrc.search_knn_from(0, 0, query, knn)[0].0)
                 // .map(|query| hrc.search_from(0, query).0)
                 .collect();
             let end_time = Instant::now();

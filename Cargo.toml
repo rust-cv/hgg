@@ -21,3 +21,7 @@ rand_xoshiro = "0.6.0"
 itertools = "0.10.1"
 csv = "1.1.6"
 serde = { version = "1.0.126", features = ["derive"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

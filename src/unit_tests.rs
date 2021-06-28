@@ -347,17 +347,17 @@ mod stats {
                 eprintln!("Inserting {}", ix);
                 // eprintln!("Stats: {:?}", hrc.stats());
             }
-            hrc.insert(key, (), 32);
+            hrc.insert(0, key, (), 32);
         }
 
         eprintln!("Trimming graph");
-        hrc.trim();
+        hrc.freshen_all();
 
         eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
         for (a, b) in (0..NUM_TRAINING_PAIRS)
             .map(|_| (rng.gen_range(0..keys.len()), rng.gen_range(0..keys.len())))
         {
-            hrc.optimize_connection(a, b);
+            hrc.optimize_connection(0, a, b);
         }
         eprintln!("Histogram: {:?}", hrc.histogram());
 
@@ -366,7 +366,7 @@ mod stats {
                 eprintln!("Searching {}", ix);
             }
             // Search each key.
-            let (_, distance) = hrc.search(key).unwrap();
+            let (_, distance) = hrc.search(0, key).unwrap();
             // Make sure that the best result is this key.
             assert_eq!(distance, 0);
         }
