@@ -167,11 +167,7 @@ where
     K: Clone,
 {
     /// Updates the `HeaderVecWeak` in neighbors of this node.
-    fn update_neighbor_weaks(
-        &mut self,
-        mut node: HeaderVecWeak<usize, HrcEdge<K>>,
-        previous: *const (),
-    ) {
+    fn update_weak(&mut self, mut node: HeaderVecWeak<usize, HrcEdge<K>>, previous: *const ()) {
         let weak = unsafe { node.weak() };
         for neighbor in node.as_mut_slice().iter_mut().map(|HrcEdge(_, weak)| weak) {
             for neighbor_weak in neighbor
@@ -191,13 +187,26 @@ where
         let b_key = self.nodes[b].key.clone();
 
         unsafe {
-            let a_edge = HrcEdge(b_key, self.nodes[b].layers[layer].weak());
-            if let Some(previous) = self.nodes[a].layers[layer].push(a_edge) {
-                self.update_neighbor_weaks(self.nodes[a].layers[layer].weak(), previous);
+            // Get the weak references. These may realloc during the push operation.
+            let mut a_weak = self.nodes[a].layers[layer].weak();
+            let mut b_weak = self.nodes[b].layers[layer].weak();
+
+            // Add the edge to b to the a node.
+            let a_edge = HrcEdge(b_key, b_weak.weak());
+            if let Some(previous) = a_weak.push(a_edge) {
+                // Update the strong reference first.
+                self.nodes[a].layers[layer].update(a_weak.weak());
+                // Update the neighbors.
+                self.update_weak(a_weak.weak(), previous);
             }
-            let b_edge = HrcEdge(a_key, self.nodes[a].layers[layer].weak());
-            if let Some(previous) = self.nodes[b].layers[layer].push(b_edge) {
-                self.update_neighbor_weaks(self.nodes[b].layers[layer].weak(), previous);
+
+            // Add the edge to a to the b node.
+            let b_edge = HrcEdge(a_key, a_weak);
+            if let Some(previous) = b_weak.push(b_edge) {
+                // Update the strong reference first.
+                self.nodes[b].layers[layer].update(b_weak.weak());
+                // Update the neighbors.
+                self.update_weak(b_weak.weak(), previous);
             }
         }
     }
