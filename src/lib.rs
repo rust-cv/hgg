@@ -6,12 +6,12 @@ mod stats;
 #[cfg(test)]
 mod unit_tests;
 
-use itertools::Itertools;
 #[cfg(feature = "stats")]
 pub use stats::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 use header_vec::{HeaderVec, HeaderVecWeak};
 use num_traits::AsPrimitive;
@@ -167,14 +167,13 @@ where
     K: Clone,
 {
     /// Updates the `HeaderVecWeak` in neighbors of this node.
-    fn update_neighbor_weaks(&mut self, layer: usize, node: usize, previous: *const ()) {
-        let strong = &mut self.nodes[node].layers[layer];
-        let weak = unsafe { strong.weak() };
-        for neighbor in strong
-            .as_mut_slice()
-            .iter_mut()
-            .map(|HrcEdge(_, weak)| weak)
-        {
+    fn update_neighbor_weaks(
+        &mut self,
+        mut node: HeaderVecWeak<usize, HrcEdge<K>>,
+        previous: *const (),
+    ) {
+        let weak = unsafe { node.weak() };
+        for neighbor in node.as_mut_slice().iter_mut().map(|HrcEdge(_, weak)| weak) {
             for neighbor_weak in neighbor
                 .as_mut_slice()
                 .iter_mut()
@@ -194,11 +193,11 @@ where
         unsafe {
             let a_edge = HrcEdge(b_key, self.nodes[b].layers[layer].weak());
             if let Some(previous) = self.nodes[a].layers[layer].push(a_edge) {
-                self.update_neighbor_weaks(layer, a, previous);
+                self.update_neighbor_weaks(self.nodes[a].layers[layer].weak(), previous);
             }
             let b_edge = HrcEdge(a_key, self.nodes[a].layers[layer].weak());
             if let Some(previous) = self.nodes[b].layers[layer].push(b_edge) {
-                self.update_neighbor_weaks(layer, b, previous);
+                self.update_neighbor_weaks(self.nodes[b].layers[layer].weak(), previous);
             }
         }
     }
@@ -216,8 +215,9 @@ where
 
 impl<K, V, D> Hrc<K, V, D>
 where
-    K: MetricPoint + Clone,
-    D: Copy + Ord + 'static,
+    K: MetricPoint + Clone + Debug,
+    V: Debug,
+    D: Copy + Ord + 'static + Debug,
     u64: AsPrimitive<D>,
 {
     /// Searches for the nearest neighbor greedily.
@@ -402,6 +402,10 @@ where
         // This is now the freshest node.
         self.freshest = new_node;
 
+        if new_node == 0 {
+            return 0;
+        }
+
         // Find knn.
         let mut knn = self.search_knn_from(layer, 0, &self.nodes[new_node].key, quality);
 
@@ -514,6 +518,9 @@ where
     ///
     /// This works even if the two nodes exist in totally disconnected graphs.
     pub fn optimize_connection(&mut self, layer: usize, a: usize, b: usize) {
+        if a == b {
+            return;
+        }
         match (
             self.optimize_connection_directed(layer, a, b),
             self.optimize_connection_directed(layer, b, a),
@@ -536,6 +543,9 @@ where
         from: usize,
         to: usize,
     ) -> Option<usize> {
+        if from == to {
+            return None;
+        }
         let key = self.nodes[to].key.clone();
         let found = self.optimize_target_directed(layer, from, 0.as_(), &key);
         if found != to {
@@ -592,17 +602,17 @@ where
                 // Start by finding the nearest neighbors to the local minima starting at itself.
                 let knn = self.search_knn_of_weak(unsafe { from.weak() }, quality);
                 // Go through the nearest neighbors in order from best to worst.
-                for (mut nn, _, _) in knn.into_iter().skip(1) {
+                for (nn, _, _) in knn.into_iter().skip(1) {
                     // Compute the distance to the target from the nn.
                     let nn_distance = self.nodes[**nn].key.distance(target).as_();
                     // Check if this node is closer to the target than `from`.
                     if nn_distance < from_distance {
                         // In this case, a greedy search to this node would get closer to the target,
                         // so add an edge to this node.
-                        from.push(HrcEdge(self.nodes[**nn].key.clone(), unsafe { nn.weak() }));
-                        nn.push(HrcEdge(self.nodes[**from].key.clone(), unsafe {
-                            from.weak()
-                        }));
+                        let nn_index = **nn;
+                        self.add_edge(layer, nn_index, **from);
+                        // Reget the nn in case adding the edge changed the pointer.
+                        let nn = unsafe { self.nodes[nn_index].layers[layer].weak() };
                         // Then we need to perform a greedy search towards the target from this node.
                         // This will become the new node for the next round of the loop.
                         let (new_from, new_from_distance) =
