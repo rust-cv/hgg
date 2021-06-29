@@ -114,7 +114,7 @@ fn main() {
             let start_time = Instant::now();
             let search_bests: Vec<usize> = query_space
                 .iter()
-                .map(|query| hrc.search_knn_from(0, 0, query, knn)[0].0)
+                .map(|query| hrc.search_knn_from(0, 0, query, knn).next().unwrap().0)
                 // .map(|query| hrc.search_from(0, query).0)
                 .collect();
             let end_time = Instant::now();
