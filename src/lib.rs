@@ -18,7 +18,10 @@ use num_traits::AsPrimitive;
 use space::MetricPoint;
 
 #[derive(Debug)]
-struct HrcEdge<K>(K, HeaderVecWeak<usize, HrcEdge<K>>);
+struct HrcEdge<K> {
+    key: K,
+    neighbor: HeaderVecWeak<usize, HrcEdge<K>>,
+}
 
 #[derive(Debug)]
 struct HrcNode<K, V> {
@@ -130,10 +133,10 @@ impl<K, V, D> Hrc<K, V, D> {
     fn remove_edge(&mut self, layer: usize, a: usize, b: usize) {
         let a = &mut self.nodes[a].layers[layer];
         let a_ptr = a.ptr();
-        a.retain(|HrcEdge(_, weak)| !weak.is(a_ptr));
+        a.retain(|HrcEdge { neighbor, .. }| !neighbor.is(a_ptr));
         let b = &mut self.nodes[b].layers[layer];
         let b_ptr = b.ptr();
-        b.retain(|HrcEdge(_, weak)| !weak.is(b_ptr));
+        b.retain(|HrcEdge { neighbor, .. }| !neighbor.is(b_ptr));
     }
 
     pub fn histogram(&self) -> Vec<Vec<(usize, usize)>> {
@@ -169,11 +172,15 @@ where
     /// Updates the `HeaderVecWeak` in neighbors of this node.
     fn update_weak(&mut self, mut node: HeaderVecWeak<usize, HrcEdge<K>>, previous: *const ()) {
         let weak = unsafe { node.weak() };
-        for neighbor in node.as_mut_slice().iter_mut().map(|HrcEdge(_, weak)| weak) {
+        for neighbor in node
+            .as_mut_slice()
+            .iter_mut()
+            .map(|HrcEdge { neighbor, .. }| neighbor)
+        {
             for neighbor_weak in neighbor
                 .as_mut_slice()
                 .iter_mut()
-                .map(|HrcEdge(_, weak)| weak)
+                .map(|HrcEdge { neighbor, .. }| neighbor)
             {
                 if neighbor_weak.is(previous) {
                     *neighbor_weak = unsafe { weak.weak() };
@@ -193,7 +200,11 @@ where
 
         unsafe {
             // Add the edge from a to b.
-            if let Some(previous) = a.push(HrcEdge(b_key, b.weak())) {
+            let edge = HrcEdge {
+                key: b_key,
+                neighbor: b.weak(),
+            };
+            if let Some(previous) = a.push(edge) {
                 // Update the strong reference first.
                 self.nodes[***a].layers[layer].update(a.weak());
                 // Update the neighbors.
@@ -201,7 +212,11 @@ where
             }
 
             // Add the edge from b to a.
-            if let Some(previous) = b.push(HrcEdge(a_key, a.weak())) {
+            let edge = HrcEdge {
+                key: a_key,
+                neighbor: a.weak(),
+            };
+            if let Some(previous) = b.push(edge) {
                 // Update the strong reference first.
                 self.nodes[***b].layers[layer].update(b.weak());
                 // Update the neighbors.
@@ -217,7 +232,11 @@ where
         b: &mut HeaderVecWeak<usize, HrcEdge<K>>,
     ) {
         let b_ptr = b.ptr();
-        if !a.as_slice().iter().any(|HrcEdge(_, weak)| weak.is(b_ptr)) {
+        if !a
+            .as_slice()
+            .iter()
+            .any(|HrcEdge { neighbor, .. }| neighbor.is(b_ptr))
+        {
             self.add_edge(layer, a, b);
         }
     }
@@ -269,7 +288,7 @@ where
         while let Some((neighbor_weak, distance)) = best_weak
             .as_slice()
             .iter()
-            .map(|HrcEdge(neighbor_key, weak)| (weak, query.distance(neighbor_key).as_()))
+            .map(|HrcEdge { key, neighbor }| (neighbor, query.distance(key).as_()))
             .min_by_key(|(_, distance)| *distance)
         {
             if distance < best_distance {
@@ -329,20 +348,20 @@ where
                 // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = unsafe { previous_node.weak() };
 
-                for HrcEdge(search_key, search_node) in previous_node.as_slice().iter() {
+                for HrcEdge { key, neighbor } in previous_node.as_slice().iter() {
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
-                    if bests.iter().any(|(node, _, _)| search_node.is(node.ptr())) {
+                    if bests.iter().any(|(node, _, _)| neighbor.is(node.ptr())) {
                         continue;
                     }
                     // Compute the distance from the query.
-                    let distance = query.distance(search_key).as_();
+                    let distance = query.distance(key).as_();
                     // If we dont have enough yet, add it.
                     if bests.len() < num {
                         bests.insert(
                             bests.partition_point(|&(_, best_distance, _)| {
                                 best_distance <= distance
                             }),
-                            (unsafe { search_node.weak() }, distance, false),
+                            (unsafe { neighbor.weak() }, distance, false),
                         );
                     } else if distance < bests.last().unwrap().1 {
                         // Otherwise only add it if its better than the worst item we have.
@@ -351,7 +370,7 @@ where
                             bests.partition_point(|&(_, best_distance, _)| {
                                 best_distance <= distance
                             }),
-                            (unsafe { search_node.weak() }, distance, false),
+                            (unsafe { neighbor.weak() }, distance, false),
                         );
                     }
                 }
@@ -418,6 +437,73 @@ where
 
         // Find knn.
         let mut knn = self.search_knn_from(layer, 0, &key, quality);
+
+        // Connect the nearest neighbor.
+        self.add_edge(
+            layer,
+            unsafe { &mut self.nodes[knn.next().unwrap().0].layers[layer].weak() },
+            &mut new_node_weak,
+        );
+
+        // Optimize the graph to each of the nearest neighbors.
+        for (nn, _) in knn {
+            self.optimize_connection_weak(
+                layer,
+                unsafe { self.nodes[nn].layers[layer].weak() },
+                new_node_weak,
+            );
+            // Get the new weak pointer, which may be realloced.
+            new_node_weak = unsafe { self.nodes[new_node].layers[layer].weak() };
+        }
+
+        new_node
+    }
+
+    /// Insert a (key, value) pair.
+    ///
+    /// `quality` is a value of at least `1` which describes the number of nearest neighbors
+    /// used to ensure greedy search around the inserted item. This number needs to be higher based
+    /// on the dimensionality of the data set, and specifically the dimensionality of the region that
+    /// this point is inserted.
+    pub fn insert_from(
+        &mut self,
+        layer: usize,
+        from: usize,
+        key: K,
+        value: V,
+        quality: usize,
+    ) -> usize {
+        assert!(from < self.len());
+        // Add the node (it will be added this way regardless).
+        let new_node = self.nodes.len();
+        // Create the node.
+        // The current freshest node's `next` is the stalest node, which will subsequently become
+        // the freshest when freshened. If this is the only node, looking up the freshest node will fail.
+        // Due to that, we set this node's next to itself if its the only node.
+        let new_node_header_vec = HeaderVec::new(new_node);
+        let mut new_node_weak = unsafe { new_node_header_vec.weak() };
+        self.nodes.push(HrcNode {
+            key: key.clone(),
+            value,
+            layers: vec![new_node_header_vec],
+            next: if new_node == 0 {
+                0
+            } else {
+                self.nodes[self.freshest].next
+            },
+        });
+        // The previous freshest node should now be freshened right before this node, as this node is now fresher.
+        // Even if this is the only node, this will still work because this node still comes after itself in the freshening order.
+        self.nodes[self.freshest].next = new_node;
+        // This is now the freshest node.
+        self.freshest = new_node;
+
+        if new_node == 0 {
+            return 0;
+        }
+
+        // Find knn.
+        let mut knn = self.search_knn_from(layer, from, &key, quality);
 
         // Connect the nearest neighbor.
         self.add_edge(
@@ -523,11 +609,11 @@ where
         for (mut neighbor, distance) in
             node.as_mut_slice()
                 .iter_mut()
-                .map(|HrcEdge(weak_key, weak)| {
-                    (unsafe { weak.weak() }, node_key.distance(weak_key).as_())
+                .map(|HrcEdge { key, neighbor }| {
+                    (unsafe { neighbor.weak() }, node_key.distance(key).as_())
                 })
         {
-            neighbor.retain(|HrcEdge(_, weak)| !weak.is(ptr));
+            neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
             neighbors.push((neighbor, distance));
         }
         node.retain(|_| false);

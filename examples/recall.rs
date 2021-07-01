@@ -11,7 +11,7 @@ const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
 const HIGHEST_KNN: usize = 32;
 const FRESHENS_PER_INSERT: usize = 2;
-const TRAINING_PAIRS: usize = 64;
+const TRAINING_KNN: usize = 256;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -78,14 +78,14 @@ fn main() {
             // Insert the key.
             let new_node = hrc.insert(0, key, (), 16);
             // Train connections to the new key.
-            for _ in 0..TRAINING_PAIRS {
-                hrc.optimize_connection(0, new_node, rng.gen_range(0..hrc.len()));
+            for (nn, _) in hrc.search_knn_of(0, new_node, TRAINING_KNN) {
+                hrc.optimize_connection(0, new_node, nn);
             }
             // Freshen the graph.
             for _ in 0..FRESHENS_PER_INSERT {
                 if let Some(node) = hrc.freshen() {
-                    for _ in 0..TRAINING_PAIRS {
-                        hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
+                    for (nn, _) in hrc.search_knn_of(0, node, TRAINING_KNN) {
+                        hrc.optimize_connection(0, node, nn);
                     }
                 }
             }
