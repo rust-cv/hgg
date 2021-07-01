@@ -1,8 +1,6 @@
 extern crate std;
 
 use hrc::Hrc;
-use rand::{Rng, SeedableRng};
-use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
@@ -56,9 +54,6 @@ fn main() {
 
     // Generate random keys.
     let keys = retrieve_search_and_train();
-
-    // Create the rng.
-    let mut rng = Xoshiro256PlusPlus::seed_from_u64(42);
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
