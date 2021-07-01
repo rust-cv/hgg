@@ -44,12 +44,6 @@ impl<K> HVec<K> {
             .iter_mut()
             .map(|HrcEdge { neighbor, .. }| neighbor)
     }
-
-    fn borders(&self, node: usize) -> bool {
-        self.as_slice()
-            .iter()
-            .any(|HrcEdge { neighbor, .. }| neighbor.node == node)
-    }
 }
 
 impl<K> HVec<K>
@@ -196,6 +190,19 @@ impl<K, V, D> Hrc<K, V, D> {
             }
         }
         histograms
+    }
+
+    pub fn simple_representation(&self) -> Vec<Vec<usize>> {
+        self.nodes
+            .iter()
+            .map(|node| {
+                node.layers[0]
+                    .as_slice()
+                    .iter()
+                    .map(|HrcEdge { neighbor, .. }| neighbor.node)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     }
 }
 
@@ -369,12 +376,12 @@ where
                 *searched = true;
                 // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = previous_node.weak();
-
                 for HrcEdge { key, neighbor } in previous_node.as_slice() {
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
                     if bests.iter().any(|(node, _, _)| neighbor.is(node.ptr())) {
                         continue;
                     }
+
                     // Compute the distance from the query.
                     let distance = query.distance(key).as_();
                     // If we dont have enough yet, add it.
@@ -455,52 +462,23 @@ where
             return 0;
         }
 
-        // Find knn.
-        let knn: Vec<_> = self.search_knn_from(layer, 0, &key, quality).collect();
+        // Find nearest neighbor via greedy search.
+        let (nn, _) = self.search_from(layer, 0, &key);
 
-        // Connect using the knn.
-        self.connect(layer, node, &knn);
+        // Add edge to nearest neighbor.
+        self.add_edge(layer, nn, node);
+
+        // Optimize the node with recent entries.
+        self.optimize_recents(layer, node, quality);
 
         node
     }
 
     /// Must be disconnected before running.
-    fn connect(&mut self, layer: usize, node: usize, knn: &[(usize, D)]) {
-        // Connect the nearest neighbor (required, and also lets us set last_change below).
-        self.add_edge(layer, knn[0].0, node);
-
-        // Keep track of the last spot in the slice right after it changed distance.
-        let mut last_change = 0;
-
-        // Connect each neighbor to the batch, making sure there is a greedy path to the node.
-        for (ix, &(nn, distance)) in knn.iter().enumerate().skip(1) {
-            // Keep track of the last place in the slice where the distance changed.
-            // This is important because greedy search ONLY chooses closer nodes.
-            if distance != knn[ix - 1].1 {
-                last_change = ix;
-            }
-            // Check if it does not border any closer nodes (or the target node).
-            if !knn[0..last_change]
-                .iter()
-                .map(|&(node, _)| node)
-                .chain(Some(node))
-                .any(|node| self.node_weak(layer, nn).borders(node))
-            {
-                // If it does not, find the closest node among them (or the target node).
-                let &(closest, _) = knn[0..last_change]
-                    .iter()
-                    .chain(Some(&(node, distance)))
-                    .min_by_key(|&(_, distance)| distance)
-                    .unwrap();
-                // Connect it to the closest node that will make the greedy search work.
-                self.add_edge(layer, nn, closest);
-            }
-        }
-
-        // Now optimize the path from this node to the neighbors.
-        // Perform a directed optimization towards all the neighbors.
-        for &(nn, _) in knn {
-            self.optimize_connection_directed(layer, node, nn);
+    fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
+        // Use quality latest nodes to optimize graph with node.
+        for other in self.len() - core::cmp::min(quality, self.len())..self.len() {
+            self.optimize_connection(layer, node, other);
         }
     }
 
@@ -554,23 +532,20 @@ where
 
         let node_key = self.nodes[node].key.clone();
 
-        // Find knn.
-        let knn: Vec<_> = self.search_knn_of(layer, node, quality).collect();
         // Disconnect the node.
-        let neighbors = self.disconnect(&mut self.node_weak(layer, node));
-        // Connect using the knn (but exclude this node itself).
-        self.connect(layer, node, &knn[1..]);
-
-        let mut node_weak = self.node_weak(layer, node);
+        let mut neighbors = self.disconnect(&mut self.node_weak(layer, node));
 
         // Make sure each neighbor can connect greedily to prevent disconnected graphs.
+        neighbors.sort_unstable_by_key(|&(_, distance)| core::cmp::Reverse(distance));
         for (neighbor, distance) in neighbors {
             let (mut nn, _) =
                 self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
-            if !nn.is(node_weak.ptr()) {
-                self.add_edge_dedup_weak(layer, &mut nn, &mut node_weak);
+            if nn.node != node {
+                self.add_edge_dedup_weak(layer, &mut nn, &mut self.node_weak(layer, node));
             }
         }
+        // Optimize the node with recent entries.
+        self.optimize_recents(layer, node, quality);
     }
 
     /// Internal function for disconnecting a node from the graph.
@@ -611,6 +586,9 @@ where
     }
 
     pub fn optimize_connection_directed(&mut self, layer: usize, from: usize, to: usize) {
+        if from == to {
+            return;
+        }
         let key = self.nodes[to].key.clone();
         let (found, distance) = self.optimize_target_directed(layer, from, 0.as_(), &key);
         // Check if we didnt find the target node.
@@ -620,7 +598,10 @@ where
                 // In that case just make sure they are connected.
                 self.add_edge_dedup(layer, found, to);
             } else {
-                panic!("fatal; graph is disconnected");
+                panic!(
+                    "fatal; graph is disconnected: {:?}",
+                    self.simple_representation()
+                );
             }
         }
     }
@@ -661,7 +642,9 @@ where
         target: &K,
     ) -> (HVec<K>, D) {
         // Search towards the target greedily.
+
         let (mut from, mut from_distance) = self.search_from_weak(from, from_distance, target);
+
         // This loop will gradually break through local minima using the nearest neighbor possible repeatedly
         // until a greedy search path is established.
         'outer: loop {
@@ -685,10 +668,11 @@ where
             }) {
                 // Start by finding the nearest neighbors to the local minima starting at itself.
                 let knn = self.search_knn_of_weak(from.weak(), quality);
+
                 // Go through the nearest neighbors in order from best to worst.
                 for (mut nn, _, _) in knn.into_iter().skip(1) {
                     // Compute the distance to the target from the nn.
-                    let nn_distance = self.nodes[nn.node].key.distance(target).as_();
+                    let nn_distance = nn.key.distance(target).as_();
                     // Check if this node is closer to the target than `from`.
                     if nn_distance < from_distance {
                         // In this case, a greedy search to this node would get closer to the target,
