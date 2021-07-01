@@ -351,7 +351,7 @@ mod stats {
         }
 
         eprintln!("Trimming graph");
-        hrc.freshen_all();
+        hrc.freshen_all(32);
 
         eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
         for (a, b) in (0..NUM_TRAINING_PAIRS)

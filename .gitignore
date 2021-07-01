@@ -7,3 +7,6 @@ Cargo.lock
 
 # Descriptor file
 /akaze
+
+# VS Code
+.vscode/

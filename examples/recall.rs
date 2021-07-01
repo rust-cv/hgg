@@ -9,7 +9,8 @@ const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
 const HIGHEST_KNN: usize = 32;
 const FRESHENS_PER_INSERT: usize = 2;
-const TRAINING_KNN: usize = 256;
+const INSERT_QUALITY: usize = 128;
+const FRESHEN_QUALITY: usize = 128;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -71,18 +72,10 @@ fn main() {
         let start_time = Instant::now();
         for &key in search_space {
             // Insert the key.
-            let new_node = hrc.insert(0, key, (), 16);
-            // Train connections to the new key.
-            for (nn, _) in hrc.search_knn_of(0, new_node, TRAINING_KNN) {
-                hrc.optimize_connection(0, new_node, nn);
-            }
+            hrc.insert(0, key, (), INSERT_QUALITY);
             // Freshen the graph.
             for _ in 0..FRESHENS_PER_INSERT {
-                if let Some(node) = hrc.freshen() {
-                    for (nn, _) in hrc.search_knn_of(0, node, TRAINING_KNN) {
-                        hrc.optimize_connection(0, node, nn);
-                    }
-                }
+                hrc.freshen(FRESHEN_QUALITY);
             }
         }
         let end_time = Instant::now();

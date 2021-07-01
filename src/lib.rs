@@ -44,6 +44,12 @@ impl<K> HVec<K> {
             .iter_mut()
             .map(|HrcEdge { neighbor, .. }| neighbor)
     }
+
+    fn borders(&self, node: usize) -> bool {
+        self.as_slice()
+            .iter()
+            .any(|HrcEdge { neighbor, .. }| neighbor.node == node)
+    }
 }
 
 impl<K> HVec<K>
@@ -450,17 +456,52 @@ where
         }
 
         // Find knn.
-        let mut knn = self.search_knn_from(layer, 0, &key, quality);
+        let knn: Vec<_> = self.search_knn_from(layer, 0, &key, quality).collect();
 
-        // Connect the nearest neighbor.
-        self.add_edge(layer, knn.next().unwrap().0, node);
-
-        // Optimize the graph to each of the nearest neighbors.
-        for (nn, _) in knn {
-            self.optimize_connection(layer, nn, node);
-        }
+        // Connect using the knn.
+        self.connect(layer, node, &knn);
 
         node
+    }
+
+    /// Must be disconnected before running.
+    fn connect(&mut self, layer: usize, node: usize, knn: &[(usize, D)]) {
+        // Connect the nearest neighbor (required, and also lets us set last_change below).
+        self.add_edge(layer, knn[0].0, node);
+
+        // Keep track of the last spot in the slice right after it changed distance.
+        let mut last_change = 0;
+
+        // Connect each neighbor to the batch, making sure there is a greedy path to the node.
+        for (ix, &(nn, distance)) in knn.iter().enumerate().skip(1) {
+            // Keep track of the last place in the slice where the distance changed.
+            // This is important because greedy search ONLY chooses closer nodes.
+            if distance != knn[ix - 1].1 {
+                last_change = ix;
+            }
+            // Check if it does not border any closer nodes (or the target node).
+            if !knn[0..last_change]
+                .iter()
+                .map(|&(node, _)| node)
+                .chain(Some(node))
+                .any(|node| self.node_weak(layer, nn).borders(node))
+            {
+                // If it does not, find the closest node among them (or the target node).
+                let &(closest, _) = knn[0..last_change]
+                    .iter()
+                    .chain(Some(&(node, distance)))
+                    .min_by_key(|&(_, distance)| distance)
+                    .unwrap();
+                // Connect it to the closest node that will make the greedy search work.
+                self.add_edge(layer, nn, closest);
+            }
+        }
+
+        // Now optimize the path from this node to the neighbors.
+        // Perform a directed optimization towards all the neighbors.
+        for &(nn, _) in knn {
+            self.optimize_connection_directed(layer, node, nn);
+        }
     }
 
     /// Freshens up the stalest node by pruning as many edges as reasonably possible from it.
@@ -471,64 +512,63 @@ where
     /// its neighbors, and other various nodes (can be random).
     ///
     /// Returns the freshened node or `None` if the HRC was empty.
-    pub fn freshen(&mut self) -> Option<usize> {
-        if self.is_empty() {
-            None
-        } else {
+    pub fn freshen(&mut self, quality: usize) {
+        if !self.is_empty() {
             // The freshest node's next is the stalest node.
             let node = self.nodes[self.freshest].next;
             // The linked list through the nodes remains the same, we only move the freshest forward by 1.
             self.freshest = node;
             // Freshen the node.
-            self.freshen_node(node);
-            Some(node)
+            self.freshen_node(node, quality);
         }
     }
 
     /// Freshens all nodes. See [`Hrc::freshen`]. This does not update the freshening order.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn freshen_all(&mut self) {
+    pub fn freshen_all(&mut self, quality: usize) {
         for node in 0..self.len() {
-            self.freshen_node(node);
+            self.freshen_node(node, quality);
         }
     }
 
     /// Freshens up a particular node. See [`Hrc::freshen`]. This does not update the freshening order.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn freshen_node(&mut self, node: usize) {
+    pub fn freshen_node(&mut self, node: usize, quality: usize) {
         // TODO: See if the layer of this node can be lowered as an optimization before reinserting it on all layers.
         // Reinsert the node on all layers to freshen it.
         for layer in 0..self.nodes[node].layers() {
-            self.reinsert(layer, node);
+            self.reinsert(layer, node, quality);
         }
     }
 
     /// Removes a node from the graph and then reinserts it with the minimum number of edges on a particular layer.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn reinsert(&mut self, layer: usize, node: usize) {
+    pub fn reinsert(&mut self, layer: usize, node: usize, quality: usize) {
         // This wont work if we only have 1 node.
         if self.len() == 1 {
             return;
         }
 
-        // Get the weak ref to the node.
-        let mut node = self.node_weak(layer, node);
-        // Get the key for the node.
-        let node_key = node.key.clone();
+        let node_key = self.nodes[node].key.clone();
 
-        // Disconnect the node from the graph, keeping track of its old neighbors.
-        // We need to do this to avoid splitting the graph into disconnected graphs.
-        let mut neighbors = self.disconnect(&mut node);
-        // Sort the neighbors so that the nearest ones come first.
-        neighbors.sort_by_key(|&(_, distance)| distance);
-        // Make sure each neighbor can connect greedily, starting from the nearest.
+        // Find knn.
+        let knn: Vec<_> = self.search_knn_of(layer, node, quality).collect();
+        // Disconnect the node.
+        let neighbors = self.disconnect(&mut self.node_weak(layer, node));
+        // Connect using the knn (but exclude this node itself).
+        self.connect(layer, node, &knn[1..]);
+
+        let mut node_weak = self.node_weak(layer, node);
+
+        // Make sure each neighbor can connect greedily to prevent disconnected graphs.
         for (neighbor, distance) in neighbors {
-            let (mut nn, _) = self.search_from_weak(neighbor, distance, &node_key);
-            if !nn.is(node.ptr()) {
-                self.add_edge_dedup_weak(layer, &mut nn, &mut node);
+            let (mut nn, _) =
+                self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
+            if !nn.is(node_weak.ptr()) {
+                self.add_edge_dedup_weak(layer, &mut nn, &mut node_weak);
             }
         }
     }
@@ -536,13 +576,13 @@ where
     /// Internal function for disconnecting a node from the graph.
     ///
     /// Returns (node, distance) pairs.
-    fn disconnect(&mut self, node: &mut HVec<K>) -> Vec<(HVec<K>, D)> {
+    fn disconnect(&mut self, node: &mut HVec<K>) -> Vec<(usize, D)> {
         let node_key = node.key.clone();
         let mut neighbors = vec![];
         let ptr = node.ptr();
         for (mut neighbor, distance) in node.neighbors_distance(&node_key) {
             neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
-            neighbors.push((neighbor, distance));
+            neighbors.push((neighbor.node, distance));
         }
         node.retain(|_| false);
         neighbors
