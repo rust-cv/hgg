@@ -327,7 +327,7 @@ mod stats {
 
     #[test]
     fn random_insertion_stats() {
-        const NUM_TRAINING_PAIRS: usize = 1 << 16;
+        const NUM_TRAINING_PAIRS: usize = 64;
         let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new().max_cluster_len(5);
 
         // Use a PRNG with good statistical properties for generating 64-bit numbers.
@@ -347,18 +347,12 @@ mod stats {
                 eprintln!("Inserting {}", ix);
                 // eprintln!("Stats: {:?}", hrc.stats());
             }
-            hrc.insert(0, key, (), 32);
+            let node = hrc.insert(0, key, ());
+            for _ in 0..NUM_TRAINING_PAIRS {
+                hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
+            }
         }
 
-        eprintln!("Trimming graph");
-        hrc.freshen_all(32);
-
-        eprintln!("Training with {} random node pairs", NUM_TRAINING_PAIRS);
-        for (a, b) in (0..NUM_TRAINING_PAIRS)
-            .map(|_| (rng.gen_range(0..keys.len()), rng.gen_range(0..keys.len())))
-        {
-            hrc.optimize_connection(0, a, b);
-        }
         eprintln!("Histogram: {:?}", hrc.histogram());
 
         for (ix, key) in keys.iter().enumerate() {

@@ -1,6 +1,7 @@
 extern crate std;
 
 use hrc::Hrc;
+use rand::{Rng, SeedableRng};
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
@@ -9,8 +10,9 @@ const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
 const NUM_SEARCH_QUERRIES: usize = 1 << 18;
 const HIGHEST_KNN: usize = 32;
 const FRESHENS_PER_INSERT: usize = 2;
-const INSERT_QUALITY: usize = 128;
-const FRESHEN_QUALITY: usize = 128;
+const RANDOM_IMPROVEMENTS: usize = 64;
+const TRAIN_FEATURES: usize = 1 << 14;
+const TRAIN_QUALITY: usize = 64;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -22,7 +24,7 @@ struct Record {
     queries_per_second: f64,
 }
 
-fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
+fn retrieve_search_and_train() -> (Vec<Hamming<Bits256>>, Vec<Hamming<Bits256>>) {
     let descriptor_size_bytes = 61;
     let total_descriptors = (1 << HIGHEST_POWER_SEARCH_SPACE) + NUM_SEARCH_QUERRIES;
     let filepath = "akaze";
@@ -32,6 +34,22 @@ fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
         total_descriptors, descriptor_size_bytes, filepath
     );
     let mut file = std::fs::File::open(filepath).expect("unable to open file");
+
+    let mut v = vec![0u8; TRAIN_FEATURES * descriptor_size_bytes];
+    file.read_exact(&mut v)
+        .expect("unable to read enough descriptors from the file; add more descriptors to file");
+    let train_space: Vec<Hamming<Bits256>> = v
+        .chunks_exact(descriptor_size_bytes)
+        .map(|b| {
+            let mut arr = [0; 32];
+            for (d, &s) in arr.iter_mut().zip(b) {
+                *d = s;
+            }
+            Hamming(Bits256(arr))
+        })
+        .collect();
+    eprintln!("Done.");
+
     let mut v = vec![0u8; total_descriptors * descriptor_size_bytes];
     file.read_exact(&mut v)
         .expect("unable to read enough descriptors from the file; add more descriptors to file");
@@ -47,14 +65,16 @@ fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
         .collect();
     eprintln!("Done.");
 
-    search_space
+    (search_space, train_space)
 }
 
 fn main() {
     let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
 
     // Generate random keys.
-    let keys = retrieve_search_and_train();
+    let (keys, training_data) = retrieve_search_and_train();
+
+    let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
@@ -72,11 +92,24 @@ fn main() {
         let start_time = Instant::now();
         for &key in search_space {
             // Insert the key.
-            hrc.insert(0, key, (), INSERT_QUALITY);
+            let node = hrc.insert(0, key, ());
+            // Optimize the node randomly.
+            for _ in 0..RANDOM_IMPROVEMENTS {
+                hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
+            }
             // Freshen the graph.
             for _ in 0..FRESHENS_PER_INSERT {
-                hrc.freshen(FRESHEN_QUALITY);
+                if let Some(node) = hrc.freshen() {
+                    // Optimize the node randomly.
+                    for _ in 0..RANDOM_IMPROVEMENTS {
+                        hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
+                    }
+                }
             }
+        }
+
+        for key in &training_data {
+            hrc.train(0, key, TRAIN_QUALITY);
         }
         let end_time = Instant::now();
         eprintln!(

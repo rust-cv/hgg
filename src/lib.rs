@@ -427,11 +427,9 @@ where
 
     /// Insert a (key, value) pair.
     ///
-    /// `quality` is a value of at least `1` which describes the number of nearest neighbors
-    /// used to ensure greedy search around the inserted item. This number needs to be higher based
-    /// on the dimensionality of the data set, and specifically the dimensionality of the region that
-    /// this point is inserted.
-    pub fn insert(&mut self, layer: usize, key: K, value: V, quality: usize) -> usize {
+    /// This connects the node to its greedy nearest neighbor. It is recommended to optimize the node
+    /// further using some method.
+    pub fn insert(&mut self, layer: usize, key: K, value: V) -> usize {
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
         // Create the node.
@@ -468,14 +466,11 @@ where
         // Add edge to nearest neighbor.
         self.add_edge(layer, nn, node);
 
-        // Optimize the node with recent entries.
-        self.optimize_recents(layer, node, quality);
-
         node
     }
 
-    /// Must be disconnected before running.
-    fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
+    /// This optimizes the node's connection to the `quality` most recently added nodes.
+    pub fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
         // Use quality latest nodes to optimize graph with node.
         for other in self.len() - core::cmp::min(quality, self.len())..self.len() {
             self.optimize_connection(layer, node, other);
@@ -490,65 +485,70 @@ where
     /// its neighbors, and other various nodes (can be random).
     ///
     /// Returns the freshened node or `None` if the HRC was empty.
-    pub fn freshen(&mut self, quality: usize) {
+    pub fn freshen(&mut self) -> Option<usize> {
         if !self.is_empty() {
             // The freshest node's next is the stalest node.
             let node = self.nodes[self.freshest].next;
             // The linked list through the nodes remains the same, we only move the freshest forward by 1.
             self.freshest = node;
             // Freshen the node.
-            self.freshen_node(node, quality);
+            self.freshen_node(node);
+            Some(node)
+        } else {
+            None
         }
     }
 
     /// Freshens all nodes. See [`Hrc::freshen`]. This does not update the freshening order.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn freshen_all(&mut self, quality: usize) {
+    pub fn freshen_all(&mut self) {
         for node in 0..self.len() {
-            self.freshen_node(node, quality);
+            self.freshen_node(node);
         }
     }
 
     /// Freshens up a particular node. See [`Hrc::freshen`]. This does not update the freshening order.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn freshen_node(&mut self, node: usize, quality: usize) {
+    pub fn freshen_node(&mut self, node: usize) {
         // TODO: See if the layer of this node can be lowered as an optimization before reinserting it on all layers.
         // Reinsert the node on all layers to freshen it.
         for layer in 0..self.nodes[node].layers() {
-            self.reinsert(layer, node, quality);
+            self.reinsert(layer, node);
         }
     }
 
     /// Removes a node from the graph and then reinserts it with the minimum number of edges on a particular layer.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    pub fn reinsert(&mut self, layer: usize, node: usize, quality: usize) {
+    pub fn reinsert(&mut self, layer: usize, node: usize) {
         // This wont work if we only have 1 node.
         if self.len() == 1 {
             return;
         }
 
-        let node_key = self.nodes[node].key.clone();
+        let mut node = self.node_weak(layer, node);
+        let node_key = node.key.clone();
 
         // Disconnect the node.
-        let mut neighbors = self.disconnect(&mut self.node_weak(layer, node));
+        let mut neighbors = self.disconnect(&mut node);
 
         // Make sure each neighbor can connect greedily to prevent disconnected graphs.
         neighbors.sort_unstable_by_key(|&(_, distance)| core::cmp::Reverse(distance));
         for (neighbor, distance) in neighbors {
             let (mut nn, _) =
                 self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
-            if nn.node != node {
-                self.add_edge_dedup_weak(layer, &mut nn, &mut self.node_weak(layer, node));
+            if !nn.is(node.ptr()) {
+                self.add_edge_dedup_weak(layer, &mut nn, &mut node);
             }
         }
-        // Optimize the node with recent entries.
-        self.optimize_recents(layer, node, quality);
     }
 
     /// Internal function for disconnecting a node from the graph.
+    ///
+    /// Returns nodes as usize because as nodes are re-added, it is possible that neighbors reallocate
+    /// and break the weak pointers.
     ///
     /// Returns (node, distance) pairs.
     fn disconnect(&mut self, node: &mut HVec<K>) -> Vec<(usize, D)> {
@@ -568,11 +568,14 @@ where
         if self.nodes.len() >= 2 {
             // First, we want to find `quality` nearest neighbors to the key.
             let mut knn = self.search_knn_from(layer, 0, key, quality);
-            let best_distance = knn.next().unwrap().1;
+            let mut best_distance = knn.next().unwrap().1;
             // Make sure that there is a greedy search path from all found nearest neighbors to the key.
             // We set the termination distance at the found nearest neighbor's distance (the closest known distance).
             for (nn, _) in knn {
-                self.optimize_target_directed(layer, nn, best_distance, key);
+                // Update the distance on each iteration in case we get a better distance.
+                best_distance = self
+                    .optimize_target_directed(layer, nn, best_distance, key)
+                    .1;
             }
         }
     }
