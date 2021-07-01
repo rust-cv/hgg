@@ -241,7 +241,7 @@ where
         );
     }
 
-    fn add_edge_dedup(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
+    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
         let b_ptr = b.ptr();
         if !a
             .as_slice()
@@ -250,6 +250,14 @@ where
         {
             self.add_edge_weak(layer, a, b);
         }
+    }
+
+    fn add_edge_dedup(&mut self, layer: usize, a: usize, b: usize) {
+        self.add_edge_dedup_weak(
+            layer,
+            &mut self.node_weak(layer, a),
+            &mut self.node_weak(layer, b),
+        );
     }
 }
 
@@ -518,7 +526,7 @@ where
         for (neighbor, distance) in neighbors {
             let (mut nn, _) = self.search_from_weak(neighbor, distance, &node_key);
             if !nn.is(node.ptr()) {
-                self.add_edge_dedup(layer, &mut nn, &mut node);
+                self.add_edge_dedup_weak(layer, &mut nn, &mut node);
             }
         }
     }
@@ -560,58 +568,22 @@ where
     ///
     /// This works even if the two nodes exist in totally disconnected graphs.
     pub fn optimize_connection(&mut self, layer: usize, a: usize, b: usize) {
-        // Optimize forwards.
-        assert!(
-            self.optimize_connection_directed(layer, a, b).is_none(),
-            "fatal; graph is disconnected"
-        );
-        // Optimize backwards.
-        assert!(
-            self.optimize_connection_directed(layer, b, a).is_none(),
-            "fatal; graph is disconnected"
-        );
+        self.optimize_connection_directed(layer, a, b);
+        self.optimize_connection_directed(layer, b, a);
     }
 
-    pub fn optimize_connection_directed(
-        &mut self,
-        layer: usize,
-        from: usize,
-        to: usize,
-    ) -> Option<(usize, D)> {
-        self.optimize_connection_directed_weak(
-            layer,
-            self.node_weak(layer, from),
-            self.node_weak(layer, to),
-        )
-        .map(|(weak, distance)| (weak.node, distance))
-    }
-
-    fn optimize_connection_directed_weak(
-        &mut self,
-        layer: usize,
-        from: HVec<K>,
-        mut to: HVec<K>,
-    ) -> Option<(HVec<K>, D)> {
-        if from.is(to.ptr()) {
-            return None;
-        }
-        let to_index = to.node;
-        let key = self.nodes[to_index].key.clone();
-        let from_distance = self.nodes[from.node].key.distance(&key).as_();
-        let (mut found, distance) =
-            self.optimize_target_directed_weak(layer, from, from_distance, 0.as_(), &key);
-        // It is possible that `to` was reallocated during the optimization, so fetch it again.
-        // This can happen if an edge was added directly to `to`.
-        to = self.node_weak(layer, to_index);
-        if !found.is(to.ptr()) {
+    pub fn optimize_connection_directed(&mut self, layer: usize, from: usize, to: usize) {
+        let key = self.nodes[to].key.clone();
+        let (found, distance) = self.optimize_target_directed(layer, from, 0.as_(), &key);
+        // Check if we didnt find the target node.
+        if found != to {
+            // Check if we just found a colocated node.
             if distance == 0.as_() {
-                self.add_edge_dedup(layer, &mut found, &mut to);
-                None
+                // In that case just make sure they are connected.
+                self.add_edge_dedup(layer, found, to);
             } else {
-                Some((found, distance))
+                panic!("fatal; graph is disconnected");
             }
-        } else {
-            None
         }
     }
 
