@@ -38,6 +38,27 @@ impl<K> HVec<K> {
     fn weak(&self) -> Self {
         unsafe { Self(self.0.weak()) }
     }
+
+    fn neighbors_mut(&mut self) -> impl Iterator<Item = &mut Self> + '_ {
+        self.as_mut_slice()
+            .iter_mut()
+            .map(|HrcEdge { neighbor, .. }| neighbor)
+    }
+}
+
+impl<K> HVec<K>
+where
+    K: MetricPoint,
+{
+    fn neighbors_distance<'a, D>(&'a self, query: &'a K) -> impl Iterator<Item = (Self, D)> + 'a
+    where
+        D: Copy + Ord + 'static,
+        u64: AsPrimitive<D>,
+    {
+        self.as_slice()
+            .iter()
+            .map(move |HrcEdge { key, neighbor }| (neighbor.weak(), query.distance(key).as_()))
+    }
 }
 
 impl<K> Deref for HVec<K> {
@@ -170,31 +191,25 @@ impl<K, V, D> Hrc<K, V, D> {
         }
         histograms
     }
-
-    fn node_weak(&self, layer: usize, node: usize) -> HVec<K> {
-        unsafe { HVec(self.nodes[node].layers[layer].weak()) }
-    }
 }
 
 impl<K, V, D> Hrc<K, V, D>
 where
-    K: Clone,
+    K: MetricPoint + Clone,
+    D: Copy + Ord + 'static,
+    u64: AsPrimitive<D>,
 {
+    fn node_weak(&self, layer: usize, node: usize) -> HVec<K> {
+        unsafe { HVec(self.nodes[node].layers[layer].weak()) }
+    }
+
     /// Updates the `HeaderVecWeak` in neighbors of this node.
     fn update_weak(&mut self, mut node: HVec<K>, previous: *const ()) {
         let weak = node.weak();
-        for neighbor in node
-            .as_mut_slice()
-            .iter_mut()
-            .map(|HrcEdge { neighbor, .. }| neighbor)
-        {
-            for neighbor_weak in neighbor
-                .as_mut_slice()
-                .iter_mut()
-                .map(|HrcEdge { neighbor, .. }| neighbor)
-            {
-                if neighbor_weak.is(previous) {
-                    *neighbor_weak = weak.weak();
+        for neighbor in node.neighbors_mut() {
+            for neighbor_neighbor in neighbor.neighbors_mut() {
+                if neighbor_neighbor.is(previous) {
+                    *neighbor_neighbor = weak.weak();
                 }
             }
         }
@@ -243,11 +258,7 @@ where
 
     fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
         let b_ptr = b.ptr();
-        if !a
-            .as_slice()
-            .iter()
-            .any(|HrcEdge { neighbor, .. }| neighbor.is(b_ptr))
-        {
+        if !a.neighbors_mut().any(|neighbor| neighbor.is(b_ptr)) {
             self.add_edge_weak(layer, a, b);
         }
     }
@@ -259,14 +270,7 @@ where
             &mut self.node_weak(layer, b),
         );
     }
-}
 
-impl<K, V, D> Hrc<K, V, D>
-where
-    K: MetricPoint + Clone,
-    D: Copy + Ord + 'static,
-    u64: AsPrimitive<D>,
-{
     /// Searches for the nearest neighbor greedily.
     ///
     /// Returns `(node, distance)`.
@@ -300,9 +304,7 @@ where
         let mut best_distance = from_distance;
 
         while let Some((neighbor_weak, distance)) = best_weak
-            .as_slice()
-            .iter()
-            .map(|HrcEdge { key, neighbor }| (neighbor, query.distance(key).as_()))
+            .neighbors_distance(query)
             .min_by_key(|(_, distance)| *distance)
         {
             if distance < best_distance {
@@ -362,7 +364,7 @@ where
                 // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = previous_node.weak();
 
-                for HrcEdge { key, neighbor } in previous_node.as_slice().iter() {
+                for HrcEdge { key, neighbor } in previous_node.as_slice() {
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
                     if bests.iter().any(|(node, _, _)| neighbor.is(node.ptr())) {
                         continue;
@@ -538,11 +540,7 @@ where
         let node_key = node.key.clone();
         let mut neighbors = vec![];
         let ptr = node.ptr();
-        for (mut neighbor, distance) in node
-            .as_mut_slice()
-            .iter_mut()
-            .map(|HrcEdge { key, neighbor }| (neighbor.weak(), node_key.distance(key).as_()))
-        {
+        for (mut neighbor, distance) in node.neighbors_distance(&node_key) {
             neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
             neighbors.push((neighbor, distance));
         }
