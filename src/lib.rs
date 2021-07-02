@@ -269,10 +269,13 @@ where
         );
     }
 
-    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
+    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) -> bool {
         let b_ptr = b.ptr();
         if !a.neighbors_mut().any(|neighbor| neighbor.is(b_ptr)) {
             self.add_edge_weak(layer, a, b);
+            true
+        } else {
+            false
         }
     }
 
@@ -429,7 +432,7 @@ where
     ///
     /// This connects the node to its greedy nearest neighbor. It is recommended to optimize the node
     /// further using some method.
-    pub fn insert(&mut self, layer: usize, key: K, value: V) -> usize {
+    pub fn insert(&mut self, layer: usize, key: K, value: V, quality: usize) -> usize {
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
         // Create the node.
@@ -461,20 +464,16 @@ where
         }
 
         // Find nearest neighbor via greedy search.
-        let (nn, _) = self.search_from(layer, 0, &key);
+        let nn = self
+            .search_knn_from(layer, 0, &key, quality)
+            .next()
+            .unwrap()
+            .0;
 
         // Add edge to nearest neighbor.
         self.add_edge(layer, nn, node);
 
         node
-    }
-
-    /// This optimizes the node's connection to the `quality` most recently added nodes.
-    pub fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
-        // Use quality latest nodes to optimize graph with node.
-        for other in self.len() - core::cmp::min(quality, self.len())..self.len() {
-            self.optimize_connection(layer, node, other);
-        }
     }
 
     /// Freshens up the stalest node by pruning as many edges as reasonably possible from it.
@@ -693,6 +692,118 @@ where
             }
             // If we get to this point, we searched the entire graph and there was no path.
             return (from, from_distance);
+        }
+    }
+
+    /// This optimizes the node's connection to the `quality` most recently added nodes.
+    pub fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
+        // Use quality latest nodes to optimize graph with node.
+        for other in self.len() - core::cmp::min(quality, self.len())..self.len() {
+            self.optimize_connection(layer, node, other);
+        }
+    }
+
+    /// Optimizes a node by discovering local minima, and then breaking through all the local minima
+    /// to the closest neighbor which is closer to the target.
+    pub fn optimize_local(
+        &mut self,
+        layer: usize,
+        node: usize,
+        targets: impl IntoIterator<Item = usize>,
+    ) {
+        if self.len() == 1 {
+            return;
+        }
+        let mut node = self.node_weak(layer, node);
+        let mut knn = self
+            .search_knn_of_weak(node.weak(), node.len().saturating_mul(2))
+            .into_iter()
+            .skip(1)
+            .map(|(nn, _, _)| (nn.node, nn.key.clone()))
+            .collect();
+        let mut neighbors = node
+            .as_slice()
+            .iter()
+            .map(|HrcEdge { key, .. }| key.clone())
+            .collect();
+        for target in targets {
+            if target == node.node {
+                continue;
+            }
+            self.optimize_local_weak(layer, &mut node, target, &mut knn, &mut neighbors)
+        }
+    }
+
+    /// Optimizes a node by discovering local minima, and then breaking through all the local minima
+    /// to the closest neighbor which is closer to the target.
+    fn optimize_local_weak(
+        &mut self,
+        layer: usize,
+        node: &mut HVec<K>,
+        target_node: usize,
+        knn: &mut Vec<(usize, K)>,
+        neighbors: &mut Vec<K>,
+    ) {
+        // Get the target.
+        let target_key = self.nodes[target_node].key.clone();
+        // Get this node's distance.
+        let this_distance = node.key.distance(&target_key).as_();
+        // If this node is colocated with the target, connect them.
+        if this_distance == 0.as_() {
+            if self.add_edge_dedup_weak(layer, node, &mut self.node_weak(layer, target_node)) {
+                neighbors.push(target_key);
+            }
+            return;
+        }
+        // Get all this node's neighbor's distances, and see if any of them are better.
+        if neighbors
+            .iter()
+            .any(|key| key.distance(&target_key).as_() < this_distance)
+        {
+            // If any of them are better, no optimization is needed.
+            return;
+        }
+
+        // Otherwise, lets find the closest neighbor to `node` that is closer to `target` than `node` is.
+        loop {
+            // Go through the nearest neighbors in order from best to worst.
+            for (nn, nn_key) in knn.iter().cloned() {
+                // Compute the distance to the target from the nn.
+                let nn_distance = nn_key.distance(&target_key).as_();
+                // Check if this node is closer to the target than `from`.
+                if nn_distance < this_distance {
+                    // In this case, a greedy search to this node would get closer to the target,
+                    // so add an edge to this node. This will update the weak ref if necessary.
+                    neighbors.push(nn_key);
+                    self.add_edge_weak(layer, &mut self.node_weak(layer, nn), node);
+                    // The greedy path now exists, so exit.
+                    return;
+                }
+            }
+
+            let before_len = knn.len();
+            // If the knn is at the full graph and we just did a search, then we couldnt find a better node in the entire graph, including the target itself.
+            if before_len + 1 == self.len() {
+                panic!(
+                    "fatal; searched entire graph: {:?}",
+                    self.simple_representation()
+                );
+            }
+            // Double the knn space.
+            *knn = self
+                .search_knn_of_weak(node.weak(), (before_len + 1).saturating_mul(2))
+                .into_iter()
+                .skip(1)
+                .map(|(nn, _, _)| (nn.node, nn.key.clone()))
+                .collect();
+            // If the knn didnt grow yet we didnt reach the full graph size, the graph is disconnected.
+            if before_len == knn.len() {
+                panic!(
+                    "fatal; graph is disconnected: {:?}, knn: {:?}",
+                    self.simple_representation(),
+                    knn.iter().map(|&(nn, _)| nn).collect::<Vec<_>>()
+                );
+            }
         }
     }
 

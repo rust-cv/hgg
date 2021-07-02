@@ -347,7 +347,7 @@ mod stats {
                 eprintln!("Inserting {}", ix);
                 // eprintln!("Stats: {:?}", hrc.stats());
             }
-            let node = hrc.insert(0, key, ());
+            let node = hrc.insert(0, key, (), 32);
             for _ in 0..NUM_TRAINING_PAIRS {
                 hrc.optimize_connection(0, node, rng.gen_range(0..hrc.len()));
             }
