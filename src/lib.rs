@@ -532,10 +532,9 @@ where
         let node_key = node.key.clone();
 
         // Disconnect the node.
-        let mut neighbors = self.disconnect(&mut node);
+        let neighbors = self.disconnect(&mut node);
 
         // Make sure each neighbor can connect greedily to prevent disconnected graphs.
-        neighbors.sort_unstable_by_key(|&(_, distance)| core::cmp::Reverse(distance));
         for (neighbor, distance) in neighbors {
             let (mut nn, _) =
                 self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
