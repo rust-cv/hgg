@@ -8,6 +8,7 @@ use std::{io::Read, time::Instant};
 
 // Dataset sizes.
 const HIGHEST_POWER_SEARCH_SPACE: u32 = 23;
+const TRAIN_FEATURES: usize = 1 << 12;
 const TEST_QUERRIES: usize = 1 << 15;
 
 // We test with every k from 1..=HIGHEST_KNN to create the recall curve.
@@ -28,6 +29,7 @@ struct Record {
 
 struct Dataset {
     search: Vec<Hamming<Bits256>>,
+    train: Vec<Hamming<Bits256>>,
     test: Vec<Hamming<Bits256>>,
 }
 
@@ -35,7 +37,8 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     let descriptor_size_bytes = 61;
     let search_descriptors = 1 << HIGHEST_POWER_SEARCH_SPACE;
     let test_descriptors = TEST_QUERRIES;
-    let total_descriptors = search_descriptors + test_descriptors;
+    let train_descriptors = TRAIN_FEATURES;
+    let total_descriptors = search_descriptors + test_descriptors + train_descriptors;
     let filepath = "akaze";
     eprintln!(
         "Reading {} descriptors of size {} bytes from file \"{}\"...",
@@ -68,14 +71,15 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     all.shuffle(rng);
 
     eprintln!(
-        "Finished shuffling. Splitting dataset into {} search and {} test descriptors",
-        search_descriptors, test_descriptors
+        "Finished shuffling. Splitting dataset into {} search, {} train, and {} test descriptors",
+        search_descriptors, train_descriptors, test_descriptors
     );
 
     let mut all = all.into_iter();
 
     Dataset {
         search: (&mut all).take(search_descriptors).collect(),
+        train: (&mut all).take(train_descriptors).collect(),
         test: all.take(test_descriptors).collect(),
     }
 }
@@ -83,7 +87,11 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
     let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
-    let Dataset { search, test } = retrieve_search_and_train(&mut rng);
+    let Dataset {
+        search,
+        train,
+        test,
+    } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
@@ -102,6 +110,9 @@ fn main() {
             // Insert the key.
             hrc.insert(0, key, (), INSERT_OPTIMIZATIONS);
         }
+
+        hrc.optimize_everything(0);
+        hrc.train(train.iter());
 
         let end_time = Instant::now();
         eprintln!(

@@ -522,19 +522,12 @@ where
     }
 
     /// Trains by creating optimized greedy search paths from `quality` nearest neighbors towards the key.
-    pub fn train(&mut self, layer: usize, key: &K, quality: usize) {
-        if self.nodes.len() >= 2 {
-            // First, we want to find `quality` nearest neighbors to the key.
-            let mut knn = self.search_knn_from(layer, 0, key, quality);
-            let mut best_distance = knn.next().unwrap().1;
-            // Make sure that there is a greedy search path from all found nearest neighbors to the key.
-            // We set the termination distance at the found nearest neighbor's distance (the closest known distance).
-            for (nn, _) in knn {
-                // Update the distance on each iteration in case we get a better distance.
-                best_distance = self
-                    .optimize_target_directed(layer, nn, best_distance, key)
-                    .1;
-            }
+    pub fn train<'a>(&mut self, data: impl Iterator<Item = &'a K> + Clone)
+    where
+        K: 'a,
+    {
+        for node in 0..self.len() {
+            self.optimize_local_target_keys(0, node, data.clone());
         }
     }
 
@@ -696,6 +689,9 @@ where
     /// This is expensive.
     pub fn optimize_everything(&mut self, layer: usize) {
         for node in 0..self.len() {
+            self.reinsert(layer, node);
+        }
+        for node in 0..self.len() {
             self.optimize_against_everything(layer, node);
         }
     }
@@ -707,7 +703,7 @@ where
     pub fn optimize_against_everything(&mut self, layer: usize, node: usize) {
         let mut node = self.node_weak(layer, node);
         let mut knn = self
-            .search_knn_of_weak(node.weak(), node.len().saturating_mul(2))
+            .search_knn_of_weak(node.weak(), self.most_edges + 1)
             .into_iter()
             .skip(1)
             .map(|(nn, _, _)| (nn.node, nn.key.clone()))
@@ -734,7 +730,6 @@ where
         &mut self,
         layer: usize,
         node: usize,
-        knn: &[(usize, K)],
         targets: impl IntoIterator<Item = &'a K>,
     ) where
         K: 'a,
@@ -743,13 +738,19 @@ where
             return;
         }
         let mut node = self.node_weak(layer, node);
+        let knn: Vec<_> = self
+            .search_knn_of_weak(node.weak(), self.most_edges + 1)
+            .into_iter()
+            .skip(1)
+            .map(|(nn, _, _)| (nn.node, nn.key.clone()))
+            .collect();
         let mut neighbors = node
             .as_slice()
             .iter()
             .map(|HrcEdge { key, .. }| key.clone())
             .collect();
         for target in targets {
-            self.optimize_local_target_key_weak(layer, &mut node, target, knn, &mut neighbors);
+            self.optimize_local_target_key_weak(layer, &mut node, target, &knn, &mut neighbors);
         }
     }
 
@@ -860,6 +861,53 @@ where
                 );
             }
         }
+    }
+
+    /// Removes a node from the graph and then reinserts it with the minimum number of edges on a particular layer.
+    ///
+    /// It is recommended to use [`Hrc::freshen`] instead of this method.
+    pub fn reinsert(&mut self, layer: usize, node: usize) {
+        // This wont work if we only have 1 node.
+        if self.len() == 1 {
+            return;
+        }
+
+        let mut node = self.node_weak(layer, node);
+        let node_key = node.key.clone();
+
+        // Disconnect the node.
+        let mut neighbors = self.disconnect(&mut node);
+
+        // Sort the neighbors to minimize the number we insert.
+        neighbors.sort_unstable_by_key(|&(_, distance)| distance);
+
+        // Make sure each neighbor can connect greedily to prevent disconnected graphs.
+        for (neighbor, distance) in neighbors {
+            let (mut nn, _) =
+                self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
+            if !nn.is(node.ptr()) {
+                self.add_edge_dedup_weak(layer, &mut nn, &mut node);
+            }
+        }
+    }
+
+    /// Internal function for disconnecting a node from the graph.
+    ///
+    /// Returns nodes as usize because as nodes are re-added, it is possible that neighbors reallocate
+    /// and break the weak pointers.
+    ///
+    /// Returns (node, distance) pairs.
+    fn disconnect(&mut self, node: &mut HVec<K>) -> Vec<(usize, D)> {
+        let node_key = node.key.clone();
+        let mut neighbors = vec![];
+        let ptr = node.ptr();
+        self.edges -= node.len();
+        for (mut neighbor, distance) in node.neighbors_distance(&node_key) {
+            neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
+            neighbors.push((neighbor.node, distance));
+        }
+        node.retain(|_| false);
+        neighbors
     }
 
     /// Computes the distance between two nodes.
