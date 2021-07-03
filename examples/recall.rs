@@ -1,17 +1,23 @@
 extern crate std;
 
 use hrc::Hrc;
-use rand::{Rng, SeedableRng};
+use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
 use space::{Bits256, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
-const HIGHEST_POWER_SEARCH_SPACE: u32 = 21;
-const NUM_SEARCH_QUERRIES: usize = 1 << 18;
+// Dataset sizes.
+const HIGHEST_POWER_SEARCH_SPACE: u32 = 23;
+const TEST_QUERRIES: usize = 1 << 15;
+const TRAIN_FEATURES: usize = 1 << 12;
+
+// We test with every k from 1..=HIGHEST_KNN.
 const HIGHEST_KNN: usize = 32;
-const FRESHENS_PER_INSERT: usize = 2;
-const RANDOM_IMPROVEMENTS: usize = 256;
-const INSERT_QUALITY: usize = 64;
+
+// These parameters tune the recall curve.
+const FRESHENS_PER_INSERT: usize = 4;
+const INSERT_QUALITY: usize = 128;
+const TRAIN_QUALITY: usize = 16384;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -23,36 +29,34 @@ struct Record {
     queries_per_second: f64,
 }
 
-fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
+struct Dataset {
+    search: Vec<Hamming<Bits256>>,
+    train: Vec<Hamming<Bits256>>,
+    test: Vec<Hamming<Bits256>>,
+}
+
+fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     let descriptor_size_bytes = 61;
-    let total_descriptors = (1 << HIGHEST_POWER_SEARCH_SPACE) + NUM_SEARCH_QUERRIES;
+    let search_descriptors = 1 << HIGHEST_POWER_SEARCH_SPACE;
+    let test_descriptors = TEST_QUERRIES;
+    let train_descriptors = TRAIN_FEATURES;
+    let total_descriptors = search_descriptors + test_descriptors + train_descriptors;
     let filepath = "akaze";
-    // Read in search space.
     eprintln!(
-        "Reading {} search space descriptors of size {} bytes from file \"{}\"...",
+        "Reading {} descriptors of size {} bytes from file \"{}\"...",
         total_descriptors, descriptor_size_bytes, filepath
     );
     let mut file = std::fs::File::open(filepath).expect("unable to open file");
 
-    // let mut v = vec![0u8; TRAIN_FEATURES * descriptor_size_bytes];
-    // file.read_exact(&mut v)
-    //     .expect("unable to read enough descriptors from the file; add more descriptors to file");
-    // let train_space: Vec<Hamming<Bits256>> = v
-    //     .chunks_exact(descriptor_size_bytes)
-    //     .map(|b| {
-    //         let mut arr = [0; 32];
-    //         for (d, &s) in arr.iter_mut().zip(b) {
-    //             *d = s;
-    //         }
-    //         Hamming(Bits256(arr))
-    //     })
-    //     .collect();
-    // eprintln!("Done.");
-
+    // Read the data.
     let mut v = vec![0u8; total_descriptors * descriptor_size_bytes];
     file.read_exact(&mut v)
         .expect("unable to read enough descriptors from the file; add more descriptors to file");
-    let search_space: Vec<Hamming<Bits256>> = v
+
+    eprintln!("Finished reading descriptors from file. Converting to keys.");
+
+    // Convert the data into descriptors.
+    let mut all: Vec<Hamming<Bits256>> = v
         .chunks_exact(descriptor_size_bytes)
         .map(|b| {
             let mut arr = [0; 32];
@@ -62,70 +66,76 @@ fn retrieve_search_and_train() -> Vec<Hamming<Bits256>> {
             Hamming(Bits256(arr))
         })
         .collect();
-    eprintln!("Done.");
+    drop(v);
 
-    search_space
+    eprintln!("Finished converting to keys. Shuffling dataset to avoid bias.");
+
+    all.shuffle(rng);
+
+    eprintln!(
+        "Finished shuffling. Splitting dataset into {} search, {} train, and {} test descriptors",
+        search_descriptors, train_descriptors, test_descriptors
+    );
+
+    let mut all = all.into_iter();
+
+    Dataset {
+        search: (&mut all).take(search_descriptors).collect(),
+        train: (&mut all).take(train_descriptors).collect(),
+        test: all.take(test_descriptors).collect(),
+    }
 }
 
 fn main() {
-    let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
-
-    // Generate random keys.
-    let keys = retrieve_search_and_train();
-
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
+    let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
+    let Dataset {
+        search,
+        train,
+        test,
+    } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
     for pow in 0..=HIGHEST_POWER_SEARCH_SPACE {
-        let search_space = if pow == 0 {
+        let new_search_items = if pow == 0 {
             // If the pow is 0, we can't compute the lower bound properly.
-            &keys[0..1]
+            &search[0..1]
         } else {
             // In all other cases, take the range from the previous to the current pow.
-            &keys[1 << (pow - 1)..1 << pow]
+            &search[1 << (pow - 1)..1 << pow]
         };
-        let query_space = &keys[1 << pow..(1 << pow) + NUM_SEARCH_QUERRIES];
         // Insert keys into HRC.
         eprintln!("Inserting keys into HRC size {}", 1 << pow);
         let start_time = Instant::now();
-        for &key in search_space {
+        for &key in new_search_items {
             // Insert the key.
             let node = hrc.insert(0, key, (), INSERT_QUALITY);
-            // Optimize the node randomly.
-            let len = hrc.len();
-            hrc.optimize_local(
-                0,
-                node,
-                (0..RANDOM_IMPROVEMENTS).map(|_| rng.gen_range(0..len)),
-            );
+            // Train the node.
+            hrc.optimize_local_keys(0, node, TRAIN_QUALITY, &train);
             // Freshen the graph.
             for _ in 0..FRESHENS_PER_INSERT {
                 if let Some(node) = hrc.freshen() {
-                    // Optimize the node randomly.
-                    hrc.optimize_local(
-                        0,
-                        node,
-                        (0..RANDOM_IMPROVEMENTS).map(|_| rng.gen_range(0..len)),
-                    );
+                    // Train the node.
+                    hrc.optimize_local_keys(0, node, TRAIN_QUALITY, &train);
                 }
             }
         }
 
         let end_time = Instant::now();
         eprintln!(
-            "Finished inserting. Speed was {} keys per second",
-            search_space.len() as f64 / (end_time - start_time).as_secs_f64()
+            "Finished inserting. Speed was {} inserts per second",
+            new_search_items.len() as f64 / (end_time - start_time).as_secs_f64()
         );
 
         eprintln!("Computing correct nearest neighbors for recall calculation");
-        let correct_nearest: Vec<Hamming<Bits256>> = query_space
+        let correct_nn_distances: Vec<u32> = test
             .iter()
             .map(|query| {
-                keys[..1 << pow]
+                search[..1 << pow]
                     .iter()
-                    .copied()
-                    .min_by_key(|key| query.distance(key))
+                    .map(|key| query.distance(key) as u32)
+                    .min()
                     .unwrap()
             })
             .collect();
@@ -134,23 +144,21 @@ fn main() {
         for knn in 1..=HIGHEST_KNN {
             eprintln!("doing size {} with knn {}", 1 << pow, knn);
             let start_time = Instant::now();
-            let search_bests: Vec<usize> = query_space
+            let hrc_nn_distances: Vec<u32> = test
                 .iter()
-                .map(|query| hrc.search_knn_from(0, 0, query, knn).next().unwrap().0)
+                .map(|query| hrc.search_knn_from(0, 0, query, knn).next().unwrap().1)
                 // .map(|query| hrc.search_from(0, query).0)
                 .collect();
             let end_time = Instant::now();
-            let num_correct = search_bests
+            let num_correct = correct_nn_distances
                 .iter()
-                .zip(correct_nearest.iter())
-                .zip(query_space.iter())
-                .filter(|&((&searched_ix, correct), query)| {
-                    hrc.get_key(searched_ix).unwrap().distance(query) == correct.distance(query)
-                })
+                .copied()
+                .zip(hrc_nn_distances)
+                .filter(|&(correct_distance, hrc_distance)| correct_distance == hrc_distance)
                 .count();
-            let recall = num_correct as f64 / NUM_SEARCH_QUERRIES as f64;
+            let recall = num_correct as f64 / test.len() as f64;
             let seconds_per_query = (end_time - start_time)
-                .div_f64(NUM_SEARCH_QUERRIES as f64)
+                .div_f64(test.len() as f64)
                 .as_secs_f64();
             let queries_per_second = seconds_per_query.recip();
             csv_out
@@ -158,7 +166,7 @@ fn main() {
                     recall,
                     search_size: 1 << pow,
                     knn,
-                    num_queries: NUM_SEARCH_QUERRIES,
+                    num_queries: test.len(),
                     seconds_per_query,
                     queries_per_second,
                 })
