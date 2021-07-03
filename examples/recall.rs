@@ -9,15 +9,12 @@ use std::{io::Read, time::Instant};
 // Dataset sizes.
 const HIGHEST_POWER_SEARCH_SPACE: u32 = 23;
 const TEST_QUERRIES: usize = 1 << 15;
-const TRAIN_FEATURES: usize = 1 << 12;
 
-// We test with every k from 1..=HIGHEST_KNN.
-const HIGHEST_KNN: usize = 32;
+// We test with every k from 1..=HIGHEST_KNN to create the recall curve.
+const HIGHEST_KNN: usize = 1 << 5;
 
-// These parameters tune the recall curve.
-const FRESHENS_PER_INSERT: usize = 4;
-const INSERT_QUALITY: usize = 128;
-const TRAIN_QUALITY: usize = 16384;
+// The higher the optimization, the better the recall curve, but the longer inserts take.
+const INSERT_OPTIMIZATIONS: usize = 1 << 12;
 
 #[derive(Debug, Serialize)]
 struct Record {
@@ -31,7 +28,6 @@ struct Record {
 
 struct Dataset {
     search: Vec<Hamming<Bits256>>,
-    train: Vec<Hamming<Bits256>>,
     test: Vec<Hamming<Bits256>>,
 }
 
@@ -39,8 +35,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     let descriptor_size_bytes = 61;
     let search_descriptors = 1 << HIGHEST_POWER_SEARCH_SPACE;
     let test_descriptors = TEST_QUERRIES;
-    let train_descriptors = TRAIN_FEATURES;
-    let total_descriptors = search_descriptors + test_descriptors + train_descriptors;
+    let total_descriptors = search_descriptors + test_descriptors;
     let filepath = "akaze";
     eprintln!(
         "Reading {} descriptors of size {} bytes from file \"{}\"...",
@@ -73,15 +68,14 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     all.shuffle(rng);
 
     eprintln!(
-        "Finished shuffling. Splitting dataset into {} search, {} train, and {} test descriptors",
-        search_descriptors, train_descriptors, test_descriptors
+        "Finished shuffling. Splitting dataset into {} search and {} test descriptors",
+        search_descriptors, test_descriptors
     );
 
     let mut all = all.into_iter();
 
     Dataset {
         search: (&mut all).take(search_descriptors).collect(),
-        train: (&mut all).take(train_descriptors).collect(),
         test: all.take(test_descriptors).collect(),
     }
 }
@@ -89,11 +83,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
     let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
-    let Dataset {
-        search,
-        train,
-        test,
-    } = retrieve_search_and_train(&mut rng);
+    let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
     let mut csv_out = csv::Writer::from_writer(stdout.lock());
@@ -110,16 +100,7 @@ fn main() {
         let start_time = Instant::now();
         for &key in new_search_items {
             // Insert the key.
-            let node = hrc.insert(0, key, (), INSERT_QUALITY);
-            // Train the node.
-            hrc.optimize_local_keys(0, node, TRAIN_QUALITY, &train);
-            // Freshen the graph.
-            for _ in 0..FRESHENS_PER_INSERT {
-                if let Some(node) = hrc.freshen() {
-                    // Train the node.
-                    hrc.optimize_local_keys(0, node, TRAIN_QUALITY, &train);
-                }
-            }
+            hrc.insert(0, key, (), INSERT_OPTIMIZATIONS);
         }
 
         let end_time = Instant::now();
@@ -127,6 +108,10 @@ fn main() {
             "Finished inserting. Speed was {} inserts per second",
             new_search_items.len() as f64 / (end_time - start_time).as_secs_f64()
         );
+
+        eprintln!("Histogram: {:?}", hrc.histogram());
+        let average_neighbors = hrc.edges() as f64 * 2.0 / hrc.len() as f64;
+        eprintln!("Average neighbors: {}", average_neighbors);
 
         eprintln!("Computing correct nearest neighbors for recall calculation");
         let correct_nn_distances: Vec<u32> = test
