@@ -113,8 +113,6 @@ pub struct Hrc<K, V, D = u64> {
     edges: usize,
     /// The highest number of edges of any node.
     most_edges: usize,
-    /// The number of inserts most_edges has not increased.
-    no_most_edges_increase_for: usize,
     /// Clusters with more items than this are split apart.
     max_cluster_len: usize,
     /// This allows a consistent number to be used for distance storage during usage.
@@ -129,7 +127,6 @@ impl<K, V, D> Hrc<K, V, D> {
             freshest: 0,
             edges: 0,
             most_edges: 0,
-            no_most_edges_increase_for: 0,
             max_cluster_len: 1024,
             _phantom: PhantomData,
         }
