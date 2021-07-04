@@ -453,7 +453,6 @@ where
     ///
     /// A value of at least `2` is recommended for `freshens`.
     pub fn insert(&mut self, layer: usize, key: K, value: V, freshens: usize) -> usize {
-        let old_most_edges = self.most_edges;
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
         // Create the node.
@@ -486,7 +485,6 @@ where
 
         // Find nearest neighbor via greedy search.
         let mut knn: Vec<_> = self
-            // .search_knn_from(layer, 0, &key, self.most_edges + 1)
             .search_knn_from(layer, 0, &key, self.optimal_k())
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
@@ -504,36 +502,6 @@ where
             &mut knn,
             &mut neighbors,
         );
-
-        // for freshen_node in self.freshen_nodes(2) {
-        //     let mut knn: Vec<_> = self
-        //         .search_knn_of(layer, freshen_node, self.most_edges + 1)
-        //         .skip(1)
-        //         .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
-        //         .collect();
-        //     self.reinsert(layer, freshen_node);
-        //     let mut freshen_node = self.node_weak(layer, freshen_node);
-        //     let mut neighbors = freshen_node
-        //         .as_slice()
-        //         .iter()
-        //         .map(|HrcEdge { key, .. }| key.clone())
-        //         .collect();
-        //     self.optimize_local_target_neighborhood_weak(
-        //         layer,
-        //         &mut freshen_node,
-        //         &mut knn,
-        //         &mut neighbors,
-        //     );
-        // }
-
-        // for freshen_node in self.freshen_nodes(2) {
-        //     self.reinsert(layer, freshen_node);
-        //     self.optimize_against_everything(layer, freshen_node);
-        // }
-
-        // if old_most_edges != self.most_edges {
-        //     self.optimize_everything(layer);
-        // }
 
         self.freshen_neighborhood(layer, freshens);
 
@@ -700,33 +668,6 @@ where
         // Use quality latest nodes to optimize graph with node.
         for other in self.len() - cmp::min(quality, self.len())..self.len() {
             self.optimize_connection(layer, node, other);
-        }
-    }
-
-    /// Optimizes a node using the stalest `num_stale` nodes in the freshening order, freshening them.
-    ///
-    /// `knn` must not include this node itself.
-    fn optimize_local_fresh(
-        &mut self,
-        layer: usize,
-        node: usize,
-        freshens: usize,
-        knn: &mut Vec<(usize, K)>,
-    ) {
-        let mut node = self.node_weak(layer, node);
-        let mut neighbors = node
-            .as_slice()
-            .iter()
-            .map(|HrcEdge { key, .. }| key.clone())
-            .collect();
-        for freshen_node in self.freshen_nodes(freshens) {
-            self.optimize_local_target_node_weak(
-                layer,
-                &mut node,
-                freshen_node,
-                knn,
-                &mut neighbors,
-            );
         }
     }
 
