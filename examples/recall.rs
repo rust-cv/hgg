@@ -3,7 +3,7 @@ extern crate std;
 use hrc::Hrc;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::{Bits256, Hamming, MetricPoint};
+use space::{Bits512, Hamming, MetricPoint};
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.
@@ -27,8 +27,8 @@ struct Record {
 }
 
 struct Dataset {
-    search: Vec<Hamming<Bits256>>,
-    test: Vec<Hamming<Bits256>>,
+    search: Vec<Hamming<Bits512>>,
+    test: Vec<Hamming<Bits512>>,
 }
 
 fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
@@ -51,14 +51,14 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     eprintln!("Finished reading descriptors from file. Converting to keys.");
 
     // Convert the data into descriptors.
-    let mut all: Vec<Hamming<Bits256>> = v
+    let mut all: Vec<Hamming<Bits512>> = v
         .chunks_exact(descriptor_size_bytes)
         .map(|b| {
-            let mut arr = [0; 32];
+            let mut arr = [0; 64];
             for (d, &s) in arr.iter_mut().zip(b) {
                 *d = s;
             }
-            Hamming(Bits256(arr))
+            Hamming(Bits512(arr))
         })
         .collect();
     drop(v);
@@ -82,7 +82,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-    let mut hrc: Hrc<Hamming<Bits256>, (), u32> = Hrc::new().max_cluster_len(5);
+    let mut hrc: Hrc<Hamming<Bits512>, (), u32> = Hrc::new().max_cluster_len(5);
     let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
