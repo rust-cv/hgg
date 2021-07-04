@@ -11,6 +11,7 @@ pub use stats::*;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::{self, Ordering};
 use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -221,6 +222,10 @@ where
         unsafe { HVec(self.nodes[node].layers[layer].weak()) }
     }
 
+    fn optimal_k(&self) -> usize {
+        (self.edges + 1).saturating_mul(3) / self.len()
+    }
+
     /// Updates the `HeaderVecWeak` in neighbors of this node.
     fn update_weak(&mut self, mut node: HVec<K>, previous: *const ()) {
         let weak = node.weak();
@@ -266,7 +271,7 @@ where
         }
 
         self.edges += 1;
-        self.most_edges = core::cmp::max(self.most_edges, core::cmp::max(a.len(), b.len()));
+        self.most_edges = cmp::max(self.most_edges, cmp::max(a.len(), b.len()));
     }
 
     fn add_edge(&mut self, layer: usize, a: usize, b: usize) {
@@ -438,11 +443,16 @@ where
 
     /// Insert a (key, value) pair.
     ///
-    /// This connects the node to its nearest neighbor when searched using a knn search.
-    /// It then optimizes the node `optimizations` times. Increasing `optimizations` will
-    /// statistically always increase your recall curve, and is thus good for lookup performance,
-    /// but increasing it will cause insertions to take longer.
-    pub fn insert(&mut self, layer: usize, key: K, value: V, optimizations: usize) -> usize {
+    /// Increase the parameter `freshens` to freshen stale nodes in the graph. Freshening nodes can improve your
+    /// recall curve. The higher this value, the longer the insert will take. However, in the long run, freshening will
+    /// improve insert performance. Counter-intuitively, if you freshen too infrequently, your graph will become
+    /// too accurate/too connected. If the graph grows too accurate, it worsens the recall curve and the
+    /// insertion time will grow at a rate that is closer to exponential. For all intents and purposes,
+    /// increasing the hight of the recall curve (Y = queries per second, X = recall) is your primary goal,
+    /// so set `freshens` at the value which does this for your dataset.
+    ///
+    /// A value of at least `2` is recommended for `freshens`.
+    pub fn insert(&mut self, layer: usize, key: K, value: V, freshens: usize) -> usize {
         let old_most_edges = self.most_edges;
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
@@ -476,35 +486,72 @@ where
 
         // Find nearest neighbor via greedy search.
         let mut knn: Vec<_> = self
-            .search_knn_from(layer, 0, &key, self.most_edges + 1)
+            // .search_knn_from(layer, 0, &key, self.most_edges + 1)
+            .search_knn_from(layer, 0, &key, self.optimal_k())
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
 
         // Add edge to nearest neighbor.
         self.add_edge(layer, knn[0].0, node);
 
-        // Optimize its edges using stalest nodes.
-        self.optimize_local_fresh(layer, node, optimizations, &mut knn);
+        let mut neighbors = vec![knn[0].1.clone()];
 
-        if old_most_edges != self.most_edges {
-            self.optimize_everything(layer);
-        }
+        // Optimize its edges using stalest nodes.
+        let mut node_weak = self.node_weak(layer, node);
+        self.optimize_local_target_neighborhood_weak(
+            layer,
+            &mut node_weak,
+            &mut knn,
+            &mut neighbors,
+        );
+
+        // for freshen_node in self.freshen_nodes(2) {
+        //     let mut knn: Vec<_> = self
+        //         .search_knn_of(layer, freshen_node, self.most_edges + 1)
+        //         .skip(1)
+        //         .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
+        //         .collect();
+        //     self.reinsert(layer, freshen_node);
+        //     let mut freshen_node = self.node_weak(layer, freshen_node);
+        //     let mut neighbors = freshen_node
+        //         .as_slice()
+        //         .iter()
+        //         .map(|HrcEdge { key, .. }| key.clone())
+        //         .collect();
+        //     self.optimize_local_target_neighborhood_weak(
+        //         layer,
+        //         &mut freshen_node,
+        //         &mut knn,
+        //         &mut neighbors,
+        //     );
+        // }
+
+        // for freshen_node in self.freshen_nodes(2) {
+        //     self.reinsert(layer, freshen_node);
+        //     self.optimize_against_everything(layer, freshen_node);
+        // }
+
+        // if old_most_edges != self.most_edges {
+        //     self.optimize_everything(layer);
+        // }
+
+        self.freshen_neighborhood(layer, freshens);
 
         node
     }
 
     /// Gives the next `num_stale` nodes, and marks them as now the freshest nodes.
-    pub fn freshen_nodes(&mut self, num_stale: usize) -> Vec<usize> {
-        let mut v = vec![];
+    pub fn freshen_nodes(&mut self, freshens: usize) -> Vec<usize> {
+        let mut freshen_nodes = vec![];
         // The freshest node's next is the stalest node.
         let mut node = self.freshest;
-        for _ in 0..num_stale {
+        for _ in 0..freshens {
             node = self.nodes[self.freshest].next;
-            v.push(node);
+            freshen_nodes.push(node);
         }
         // The linked list through the nodes remains the same, we only move the freshest forward by 1.
         self.freshest = node;
-        v
+        freshen_nodes
     }
 
     /// Gives the next `num_stale` node keys, and marks them as now the freshest nodes.
@@ -651,7 +698,7 @@ where
     /// This optimizes the node's connection to the `quality` most recently added nodes.
     pub fn optimize_recents(&mut self, layer: usize, node: usize, quality: usize) {
         // Use quality latest nodes to optimize graph with node.
-        for other in self.len() - core::cmp::min(quality, self.len())..self.len() {
+        for other in self.len() - cmp::min(quality, self.len())..self.len() {
             self.optimize_connection(layer, node, other);
         }
     }
@@ -663,22 +710,48 @@ where
         &mut self,
         layer: usize,
         node: usize,
-        num_stale: usize,
+        freshens: usize,
         knn: &mut Vec<(usize, K)>,
     ) {
-        let freshen_nodes = self.freshen_nodes(num_stale);
         let mut node = self.node_weak(layer, node);
         let mut neighbors = node
             .as_slice()
             .iter()
             .map(|HrcEdge { key, .. }| key.clone())
             .collect();
-        for freshen_node in freshen_nodes {
+        for freshen_node in self.freshen_nodes(freshens) {
             self.optimize_local_target_node_weak(
                 layer,
                 &mut node,
                 freshen_node,
                 knn,
+                &mut neighbors,
+            );
+        }
+    }
+
+    /// Optimizes a node using the stalest `num_stale` nodes in the freshening order, freshening them.
+    ///
+    /// `knn` must not include this node itself.
+    fn freshen_neighborhood(&mut self, layer: usize, freshens: usize) {
+        for node in self.freshen_nodes(freshens) {
+            self.reinsert(layer, node);
+            let mut knn: Vec<_> = self
+                .search_knn_of(layer, node, self.optimal_k())
+                .skip(1)
+                .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
+                .collect();
+            self.reinsert(layer, node);
+            let mut node = self.node_weak(layer, node);
+            let mut neighbors = node
+                .as_slice()
+                .iter()
+                .map(|HrcEdge { key, .. }| key.clone())
+                .collect();
+            self.optimize_local_target_neighborhood_weak(
+                layer,
+                &mut node,
+                &mut knn,
                 &mut neighbors,
             );
         }
@@ -691,6 +764,25 @@ where
         for node in 0..self.len() {
             self.reinsert(layer, node);
         }
+        // for node in 0..self.len() {
+        //     let mut knn: Vec<_> = self
+        //         .search_knn_of(layer, node, self.most_edges + 1)
+        //         .skip(1)
+        //         .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
+        //         .collect();
+        //     let mut freshen_node = self.node_weak(layer, node);
+        //     let mut neighbors = freshen_node
+        //         .as_slice()
+        //         .iter()
+        //         .map(|HrcEdge { key, .. }| key.clone())
+        //         .collect();
+        //     self.optimize_local_target_neighborhood_weak(
+        //         layer,
+        //         &mut freshen_node,
+        //         &mut knn,
+        //         &mut neighbors,
+        //     );
+        // }
         for node in 0..self.len() {
             self.optimize_against_everything(layer, node);
         }
@@ -703,7 +795,7 @@ where
     pub fn optimize_against_everything(&mut self, layer: usize, node: usize) {
         let mut node = self.node_weak(layer, node);
         let mut knn = self
-            .search_knn_of_weak(node.weak(), self.most_edges + 1)
+            .search_knn_of_weak(node.weak(), self.optimal_k())
             .into_iter()
             .skip(1)
             .map(|(nn, _, _)| (nn.node, nn.key.clone()))
@@ -726,6 +818,26 @@ where
 
     /// Optimizes a node by discovering local minima, and then breaking through all the local minima
     /// to the closest neighbor which is closer to the target.
+    ///
+    /// Runs this against its neighbors.
+    pub fn optimize_against_neighborhood(&mut self, layer: usize, node: usize) {
+        let mut node = self.node_weak(layer, node);
+        let mut knn = self
+            .search_knn_of_weak(node.weak(), self.optimal_k())
+            .into_iter()
+            .skip(1)
+            .map(|(nn, _, _)| (nn.node, nn.key.clone()))
+            .collect();
+        let mut neighbors = node
+            .as_slice()
+            .iter()
+            .map(|HrcEdge { key, .. }| key.clone())
+            .collect();
+        self.optimize_local_target_neighborhood_weak(layer, &mut node, &mut knn, &mut neighbors);
+    }
+
+    /// Optimizes a node by discovering local minima, and then breaking through all the local minima
+    /// to the closest neighbor which is closer to the target.
     pub fn optimize_local_target_keys<'a>(
         &mut self,
         layer: usize,
@@ -739,7 +851,7 @@ where
         }
         let mut node = self.node_weak(layer, node);
         let knn: Vec<_> = self
-            .search_knn_of_weak(node.weak(), self.most_edges + 1)
+            .search_knn_of_weak(node.weak(), self.optimal_k())
             .into_iter()
             .skip(1)
             .map(|(nn, _, _)| (nn.node, nn.key.clone()))
@@ -807,19 +919,37 @@ where
         }
         let target_key = self.nodes[target_node].key.clone();
         // Get this node's distance.
-        let this_distance = node.key.distance(&target_key).as_();
+        let to_beat = node.key.distance(&target_key).as_();
         // Check if the node is colocated.
-        if this_distance == 0.as_() {
+        if to_beat == 0.as_() {
             // In this case, add an edge (with dedup) between them to make sure there is a path.
             self.add_edge_dedup_weak(layer, node, &mut self.node_weak(layer, target_node));
             return;
         }
-        // Get all this node's neighbor's distances, and see if any of them are better.
+        // // Get all this node's neighbor's distances, and see if any of them are better.
+        // // This will return a to_beat distance even if there is a better distance if there are two or more
+        // // with the same distance. By doing this, we make sure there is a totally unique best path to the target,
+        // // and it allows us to break through hyper-concave surfaces.
+        // let to_beat = match Self::find_non_better_or_non_unqiue_best_distance(
+        //     to_beat,
+        //     &target_key,
+        //     neighbors.iter(),
+        // ) {
+        //     Some(to_beat) => to_beat,
+        //     None => return,
+        // };
+
+        // // If there is a neighbor that has a distance of 0, we cant improve that result.
+        // if to_beat == 0.as_() {
+        //     // TODO: Connect that neighbor (maybe return it above) with the target for improved performance.
+        //     return;
+        // }
+
         if neighbors
             .iter()
-            .any(|key| key.distance(&target_key).as_() < this_distance)
+            .any(|key| target_key.distance(key).as_() < to_beat)
         {
-            // If any of them are better, no optimization is needed.
+            // If any are better, then no optimization needed.
             return;
         }
 
@@ -829,12 +959,13 @@ where
             for (nn, nn_key) in knn.iter().cloned() {
                 // Compute the distance to the target from the nn.
                 let nn_distance = nn_key.distance(&target_key).as_();
-                // Check if this node is closer to the target than `from`.
-                if nn_distance < this_distance {
-                    // In this case, a greedy search to this node would get closer to the target,
-                    // so add an edge to this node. This will update the weak ref if necessary.
+                // Add the node as a neighbor (closer or not).
+                // This will update the weak ref if necessary.
+                if self.add_edge_dedup_weak(layer, &mut self.node_weak(layer, nn), node) {
                     neighbors.push(nn_key);
-                    self.add_edge_weak(layer, &mut self.node_weak(layer, nn), node);
+                }
+                // Check if this node is closer to the target than `from`.
+                if nn_distance < to_beat {
                     // The greedy path now exists, so exit.
                     return;
                 }
@@ -859,6 +990,103 @@ where
                     self.simple_representation(),
                     knn.iter().map(|&(nn, _)| nn).collect::<Vec<_>>()
                 );
+            }
+        }
+    }
+
+    /// Optimizes a node by discovering local minima, and then breaking through all the local minima
+    /// to the closest neighbor which is closer to the target.
+    fn optimize_local_target_neighborhood_weak(
+        &mut self,
+        layer: usize,
+        node: &mut HVec<K>,
+        knn: &mut Vec<(usize, K)>,
+        neighbors: &mut Vec<K>,
+    ) {
+        let mut knn_index = 0;
+        'knn_next: while let Some((target_node, target_key)) = knn.get(knn_index).cloned() {
+            // Get this node's distance.
+            let to_beat = node.key.distance(&target_key).as_();
+            // Check if the node is colocated.
+            if to_beat == 0.as_() {
+                // In this case, add an edge (with dedup) between them to make sure there is a path.
+                self.add_edge_dedup_weak(layer, node, &mut self.node_weak(layer, target_node));
+                knn_index += 1;
+                continue 'knn_next;
+            }
+            // // Get all this node's neighbor's distances, and see if any of them are better.
+            // // This will return a to_beat distance even if there is a better distance if there are two or more
+            // // with the same distance. By doing this, we make sure there is a totally unique best path to the target,
+            // // and it allows us to break through hyper-concave surfaces.
+            // let to_beat = match Self::find_non_better_or_non_unqiue_best_distance(
+            //     to_beat,
+            //     &target_key,
+            //     neighbors.iter(),
+            // ) {
+            //     Some(to_beat) => to_beat,
+            //     None => {
+            //         knn_index += 1;
+            //         continue 'knn_next;
+            //     }
+            // };
+
+            // // If there is a neighbor that has a distance of 0, we cant improve that result.
+            // if to_beat == 0.as_() {
+            //     // TODO: Connect that neighbor (maybe return it above) with the target for improved performance.
+            //     knn_index += 1;
+            //     continue 'knn_next;
+            // }
+
+            if neighbors
+                .iter()
+                .any(|key| target_key.distance(key).as_() < to_beat)
+            {
+                // If any are better, then no optimization needed.
+                knn_index += 1;
+                continue 'knn_next;
+            }
+
+            // Otherwise, lets find the closest neighbor to `node` that is closer to `target` than `node` is.
+            loop {
+                // Go through the nearest neighbors in order from best to worst.
+                for (nn, nn_key) in knn.iter().cloned() {
+                    // Compute the distance to the target from the nn.
+                    let nn_distance = nn_key.distance(&target_key).as_();
+                    // Add the node as a neighbor (closer or not).
+                    // This will update the weak ref if necessary.
+                    if self.add_edge_dedup_weak(layer, &mut self.node_weak(layer, nn), node) {
+                        neighbors.push(nn_key);
+                    }
+                    // Check if this node is closer to the target than `from`.
+                    if nn_distance < to_beat {
+                        // The greedy path now exists, so exit.
+                        knn_index += 1;
+                        continue 'knn_next;
+                    }
+                }
+
+                let before_len = knn.len();
+                // If we searched the maximum number of nodes that we are willing to (or can, if its len - 1), then exit early without improvement.
+                if before_len == self.len() - 1 {
+                    panic!("fatal; we searched entire graph and did not find the node!");
+                }
+                // Double the knn space.
+                *knn = self
+                    .search_knn_of_weak(node.weak(), (knn.len() + 1).saturating_mul(2))
+                    .into_iter()
+                    .skip(1)
+                    .map(|(nn, _, _)| (nn.node, nn.key.clone()))
+                    .collect();
+                // Reset the knn index, as we may have new found neighbors now.
+                knn_index = 0;
+                // If the knn didnt grow yet we didnt reach the maximum_knn yet, the graph is disconnected.
+                if before_len == knn.len() {
+                    panic!(
+                        "fatal; graph is disconnected: {:?}, knn: {:?}",
+                        self.simple_representation(),
+                        knn.iter().map(|&(nn, _)| nn).collect::<Vec<_>>()
+                    );
+                }
             }
         }
     }
@@ -908,6 +1136,50 @@ where
         }
         node.retain(|_| false);
         neighbors
+    }
+
+    /// Determines if there is a best key in searching to a target
+    /// that is better than a threshold distance.
+    /// If there is, it returns `None`. However, if there isn't,
+    /// it returns the best `Some(distance)`.
+    ///
+    /// In this case, there are two scenarios which can result in
+    /// `Some(distance)` being produced. If there is nothing better than the
+    /// `to_beat` distance, then `Some(distance)` will be returned with the `to_beat`
+    /// distance. If there is something better than the `to_beat` distance, but
+    /// there are two or more things with that distance, then this will return
+    /// `Some(distance)` with the distance set to that distance. Basically, if
+    /// the best distance has two or more keys associated with it, then we return
+    /// that distance.
+    pub fn find_non_better_or_non_unqiue_best_distance<'a>(
+        mut to_beat: D,
+        target: &K,
+        keys: impl IntoIterator<Item = &'a K>,
+    ) -> Option<D>
+    where
+        K: 'a,
+    {
+        // Duplicate is set to true initially so that if nothing better is found, the initial distance
+        // is returned.
+        let mut duplicate = true;
+        for key in keys {
+            let distance = key.distance(target).as_();
+            match distance.cmp(&to_beat) {
+                Ordering::Less => {
+                    duplicate = false;
+                    to_beat = distance;
+                }
+                Ordering::Equal => {
+                    duplicate = true;
+                }
+                Ordering::Greater => {}
+            }
+        }
+        if duplicate {
+            Some(to_beat)
+        } else {
+            None
+        }
     }
 
     /// Computes the distance between two nodes.
