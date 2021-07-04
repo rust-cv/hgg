@@ -103,9 +103,6 @@ fn main() {
             hrc.insert(0, key, (), INSERT_FRESHENS);
         }
 
-        // hrc.optimize_everything(0);
-        // hrc.train(train.iter());
-
         let end_time = Instant::now();
         eprintln!(
             "Finished inserting. Speed was {} inserts per second",
@@ -135,7 +132,6 @@ fn main() {
             let hrc_nn_distances: Vec<u32> = test
                 .iter()
                 .map(|query| hrc.search_knn_from(0, 0, query, knn).next().unwrap().1)
-                // .map(|query| hrc.search_from(0, query).0)
                 .collect();
             let end_time = Instant::now();
             let num_correct = correct_nn_distances
