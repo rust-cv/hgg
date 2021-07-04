@@ -1,1 +1,1 @@
-function runrecall { cargo run --release --example recall > "$1.csv" 2> >(tee "$1.log" >&2); }
+function runrecall { RUSTFLAGS="-Ctarget-cpu=native" cargo run --release --example recall > "$1.csv" 2> >(tee "$1.log" >&2); }
