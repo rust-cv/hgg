@@ -4,13 +4,16 @@ extern crate alloc;
 #[cfg(test)]
 mod unit_tests;
 
+use ahash::RandomState;
 use alloc::{vec, vec::Vec};
 use core::{
     cmp,
     fmt::Debug,
+    hash::{Hash, Hasher},
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
+use hashbrown::HashSet;
 use header_vec::{HeaderVec, HeaderVecWeak};
 use num_traits::AsPrimitive;
 use space::MetricPoint;
@@ -68,6 +71,48 @@ impl<K> Deref for HVec<K> {
 impl<K> DerefMut for HVec<K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl<K> PartialEq for HVec<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr().eq(&other.ptr())
+    }
+}
+
+impl<K> Eq for HVec<K> {}
+
+impl<K> PartialOrd for HVec<K> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.ptr().partial_cmp(&other.ptr())
+    }
+
+    fn lt(&self, other: &Self) -> bool {
+        self.ptr().lt(&other.ptr())
+    }
+    fn le(&self, other: &Self) -> bool {
+        self.ptr().le(&other.ptr())
+    }
+    fn gt(&self, other: &Self) -> bool {
+        self.ptr().gt(&other.ptr())
+    }
+    fn ge(&self, other: &Self) -> bool {
+        self.ptr().ge(&other.ptr())
+    }
+}
+
+impl<K> Ord for HVec<K> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.ptr().cmp(&other.ptr())
+    }
+}
+
+impl<K> Hash for HVec<K> {
+    fn hash<H>(&self, hasher: &mut H)
+    where
+        H: Hasher,
+    {
+        self.ptr().hash(hasher);
     }
 }
 
@@ -511,7 +556,14 @@ where
         // Perform a greedy search first to save time.
         let (from, from_distance) = self.search_from_weak(from, from_distance, query);
         // Contains the index and the distance as a pair.
-        let mut bests = vec![(from, from_distance, false)];
+        let mut bests = vec![(from.weak(), from_distance, false)];
+
+        // This set is used to more quickly determine if a node is contained in the best set.
+        let mut bests_set = HashSet::with_capacity_and_hasher(
+            num.saturating_mul(2),
+            RandomState::with_seeds(0, 0, 0, 0),
+        );
+        bests_set.insert(from);
 
         loop {
             if let Some((previous_node, _, searched)) =
@@ -524,7 +576,7 @@ where
                 for HrcEdge { key, neighbor } in previous_node.as_slice() {
                     // TODO: Try this as a BTreeSet.
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
-                    if bests.iter().any(|(node, _, _)| neighbor.is(node.ptr())) {
+                    if bests_set.contains(neighbor) {
                         continue;
                     }
 
@@ -538,15 +590,18 @@ where
                             }),
                             (neighbor.weak(), distance, false),
                         );
+                        bests_set.insert(neighbor.weak());
                     } else if distance < bests.last().unwrap().1 {
                         // Otherwise only add it if its better than the worst item we have.
-                        bests.pop();
+                        let (old_node, _, _) = bests.pop().unwrap();
+                        bests_set.remove(&old_node);
                         bests.insert(
                             bests.partition_point(|&(_, best_distance, _)| {
                                 best_distance <= distance
                             }),
                             (neighbor.weak(), distance, false),
                         );
+                        bests_set.insert(neighbor.weak());
                     }
                 }
             } else {
