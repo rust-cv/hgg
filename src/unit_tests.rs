@@ -327,7 +327,7 @@ mod stats {
 
     #[test]
     fn random_insertion_stats() {
-        let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new().max_cluster_len(5);
+        let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new();
 
         // Use a PRNG with good statistical properties for generating 64-bit numbers.
         let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
@@ -346,7 +346,7 @@ mod stats {
                 eprintln!("Inserting {}", ix);
                 // eprintln!("Stats: {:?}", hrc.stats());
             }
-            hrc.insert(0, key, (), 1 << 12);
+            hrc.insert(0, key, ());
         }
 
         eprintln!("Histogram: {:?}", hrc.histogram());

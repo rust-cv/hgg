@@ -114,8 +114,8 @@ pub struct Hrc<K, V, D = u64> {
     edges: usize,
     /// The highest number of edges of any node.
     most_edges: usize,
-    /// Clusters with more items than this are split apart.
-    max_cluster_len: usize,
+    /// Number of freshens per insert.
+    freshens: usize,
     /// This allows a consistent number to be used for distance storage during usage.
     _phantom: PhantomData<D>,
 }
@@ -128,19 +128,24 @@ impl<K, V, D> Hrc<K, V, D> {
             freshest: 0,
             edges: 0,
             most_edges: 0,
-            max_cluster_len: 1024,
+            freshens: 2,
             _phantom: PhantomData,
         }
     }
 
-    /// Changes the distance metric type.
-
-    /// Sets the max number of items allowed in a cluster before it is split apart.
-    pub fn max_cluster_len(self, max_cluster_len: usize) -> Self {
-        Self {
-            max_cluster_len,
-            ..self
-        }
+    /// Default value: `2`
+    ///
+    /// Increase the parameter `freshens` to freshen stale nodes in the graph. Freshening nodes can improve your
+    /// recall curve. The higher this value, the longer the insert will take. However, in the long run, freshening will
+    /// improve insert performance. Counter-intuitively, if you freshen too infrequently, your graph will become
+    /// too accurate/too connected. If the graph grows too accurate, it worsens the recall curve and the
+    /// insertion time will grow at a rate that is closer to exponential. For all intents and purposes,
+    /// increasing the hight of the recall curve (Y = queries per second, X = recall) is your primary goal,
+    /// so set `freshens` at the value which does this for your dataset.
+    ///
+    /// A value of at least `2` is recommended for `freshens`.
+    pub fn freshens(self, freshens: usize) -> Self {
+        Self { freshens, ..self }
     }
 
     /// Get the (key, value) pair of a node.
@@ -434,17 +439,7 @@ where
     }
 
     /// Insert a (key, value) pair.
-    ///
-    /// Increase the parameter `freshens` to freshen stale nodes in the graph. Freshening nodes can improve your
-    /// recall curve. The higher this value, the longer the insert will take. However, in the long run, freshening will
-    /// improve insert performance. Counter-intuitively, if you freshen too infrequently, your graph will become
-    /// too accurate/too connected. If the graph grows too accurate, it worsens the recall curve and the
-    /// insertion time will grow at a rate that is closer to exponential. For all intents and purposes,
-    /// increasing the hight of the recall curve (Y = queries per second, X = recall) is your primary goal,
-    /// so set `freshens` at the value which does this for your dataset.
-    ///
-    /// A value of at least `2` is recommended for `freshens`.
-    pub fn insert(&mut self, layer: usize, key: K, value: V, freshens: usize) -> usize {
+    pub fn insert(&mut self, layer: usize, key: K, value: V) -> usize {
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
         // Create the node.
@@ -495,30 +490,26 @@ where
             &mut neighbors,
         );
 
-        self.freshen_neighborhood(layer, freshens);
+        self.freshen_neighborhood(layer, self.freshens);
 
         node
     }
 
     /// Gives the next `num_stale` nodes, and marks them as now the freshest nodes.
-    pub fn freshen_nodes(&mut self, freshens: usize) -> Vec<usize> {
-        let mut freshen_nodes = vec![];
-        // The freshest node's next is the stalest node.
+    pub fn freshen_nodes(&mut self) -> impl Iterator<Item = usize> + '_ {
         let mut node = self.freshest;
-        for _ in 0..freshens {
-            node = self.nodes[self.freshest].next;
-            freshen_nodes.push(node);
-        }
-        // The linked list through the nodes remains the same, we only move the freshest forward by 1.
-        self.freshest = node;
-        freshen_nodes
+        core::iter::from_fn(move || {
+            node = self.nodes[node].next;
+            self.freshest = node;
+            Some(node)
+        })
     }
 
     /// Optimizes a node using the stalest `num_stale` nodes in the freshening order, freshening them.
     ///
     /// `knn` must not include this node itself.
     fn freshen_neighborhood(&mut self, layer: usize, freshens: usize) {
-        for node in self.freshen_nodes(freshens) {
+        for node in self.freshen_nodes().take(freshens).collect::<Vec<_>>() {
             self.reinsert(layer, node);
             let mut knn: Vec<_> = self
                 .search_knn_of(layer, node, self.optimal_k())

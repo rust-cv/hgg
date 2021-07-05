@@ -13,9 +13,6 @@ const TEST_QUERRIES: usize = 1 << 15;
 // We test with every k from 1..=HIGHEST_KNN to create the recall curve.
 const HIGHEST_KNN: usize = 1 << 5;
 
-// The higher the optimization, the better the recall curve, but the longer inserts take.
-const INSERT_FRESHENS: usize = 4;
-
 #[derive(Debug, Serialize)]
 struct Record {
     recall: f64,
@@ -82,7 +79,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-    let mut hrc: Hrc<Hamming<Bits512>, (), u32> = Hrc::new().max_cluster_len(5);
+    let mut hrc: Hrc<Hamming<Bits512>, (), u32> = Hrc::new();
     let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
@@ -100,7 +97,7 @@ fn main() {
         let start_time = Instant::now();
         for &key in new_search_items {
             // Insert the key.
-            hrc.insert(0, key, (), INSERT_FRESHENS);
+            hrc.insert(0, key, ());
         }
 
         let end_time = Instant::now();
