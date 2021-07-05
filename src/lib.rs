@@ -386,7 +386,6 @@ where
             key: key.clone(),
             node,
         });
-        // TODO: Create the node using HeaderVec::with_capacity().
         self.nodes.push(HrcNode {
             key: key.clone(),
             value,
