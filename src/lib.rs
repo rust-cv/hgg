@@ -410,7 +410,8 @@ where
         self.add_edge(layer, knn[0].0, node);
 
         // The initial neighbors only includes the edge we just added.
-        let mut neighbors = vec![knn[0].1.clone()];
+        let mut neighbors = Vec::with_capacity(self.optimal_k());
+        neighbors.push(knn[0].1.clone());
 
         // Optimize its edges using stalest nodes.
         let mut node_weak = self.node_weak(layer, node);
@@ -458,11 +459,12 @@ where
             .collect();
         self.reinsert(layer, node);
         let mut node = self.node_weak(layer, node);
-        let mut neighbors = node
-            .as_slice()
-            .iter()
-            .map(|HrcEdge { key, .. }| key.clone())
-            .collect();
+        let mut neighbors = Vec::with_capacity(self.optimal_k());
+        neighbors.extend(
+            node.as_slice()
+                .iter()
+                .map(|HrcEdge { key, .. }| key.clone()),
+        );
         self.optimize_neighborhood(layer, &mut node, &mut knn, &mut neighbors);
     }
 
@@ -575,7 +577,7 @@ where
 
             if neighbors
                 .iter()
-                .any(|key| target_key.distance(key).as_() < to_beat)
+                .any(|key| key.distance(&target_key).as_() < to_beat)
             {
                 // If any are better, then no optimization needed.
                 knn_index += 1;
