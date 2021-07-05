@@ -1,21 +1,16 @@
 #![no_std]
 extern crate alloc;
 
-#[cfg(feature = "stats")]
-mod stats;
 #[cfg(test)]
 mod unit_tests;
 
-#[cfg(feature = "stats")]
-pub use stats::*;
-
-use alloc::vec;
-use alloc::vec::Vec;
-use core::cmp;
-use core::fmt::Debug;
-use core::marker::PhantomData;
-use core::ops::Deref;
-use core::ops::DerefMut;
+use alloc::{vec, vec::Vec};
+use core::{
+    cmp,
+    fmt::Debug,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 use header_vec::{HeaderVec, HeaderVecWeak};
 use num_traits::AsPrimitive;
 use space::MetricPoint;
