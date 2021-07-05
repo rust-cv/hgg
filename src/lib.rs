@@ -156,6 +156,8 @@ pub struct Hrc<K, V, D = u64> {
     most_edges: usize,
     /// Number of freshens per insert.
     freshens: usize,
+    /// Whether to exclude all keys for which the distance has been calculated in kNN search.
+    exclude_all_searched: bool,
     /// This allows a consistent number to be used for distance storage during usage.
     _phantom: PhantomData<D>,
 }
@@ -169,6 +171,7 @@ impl<K, V, D> Hrc<K, V, D> {
             edges: 0,
             most_edges: 0,
             freshens: 2,
+            exclude_all_searched: false,
             _phantom: PhantomData,
         }
     }
@@ -186,6 +189,18 @@ impl<K, V, D> Hrc<K, V, D> {
     /// A value of at least `2` is recommended for `freshens`.
     pub fn freshens(self, freshens: usize) -> Self {
         Self { freshens, ..self }
+    }
+
+    /// Default value: `false`
+    ///
+    /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
+    /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
+    /// distance functions. If your distance function is expensive, benchmark HRC with this parameter set to `true`.
+    pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
+        Self {
+            exclude_all_searched,
+            ..self
+        }
     }
 
     /// Get the (key, value) pair of a node.
@@ -594,7 +609,12 @@ where
                     } else if distance < bests.last().unwrap().1 {
                         // Otherwise only add it if its better than the worst item we have.
                         // Remove the worst item we have now and exclude it if exclude_all_searched is set.
-                        bests.pop();
+                        if self.exclude_all_searched {
+                            let (old_node, _, _) = bests.pop().unwrap();
+                            exclude.remove(&old_node);
+                        } else {
+                            bests.pop();
+                        }
                         exclude.insert(neighbor.weak());
                         bests.insert(
                             bests.partition_point(|&(_, best_distance, _)| {
