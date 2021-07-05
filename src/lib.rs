@@ -142,6 +142,7 @@ impl<K, V> HrcNode<K, V> {
 /// This parameter DOES affect the performance in benchmarks, though the amount may vary between machines.
 /// Smaller integer types will yield better performance, but the difference will likely be less than 25%.
 /// On one machine, u64 -> u32 yielded 10-20% performance, but u32 -> u16 yielded less than 1%.
+/// This will also have a much more negligable effect for key types with an expensive distance function.
 #[derive(Debug)]
 pub struct Hrc<K, V, D = u64> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
