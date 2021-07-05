@@ -156,6 +156,8 @@ pub struct Hrc<K, V, D = u64> {
     most_edges: usize,
     /// Number of freshens per insert.
     freshens: usize,
+    /// Whether to exclude all keys for which the distance has been calculated in kNN search.
+    exclude_all_searched: bool,
     /// This allows a consistent number to be used for distance storage during usage.
     _phantom: PhantomData<D>,
 }
@@ -169,6 +171,7 @@ impl<K, V, D> Hrc<K, V, D> {
             edges: 0,
             most_edges: 0,
             freshens: 2,
+            exclude_all_searched: false,
             _phantom: PhantomData,
         }
     }
@@ -186,6 +189,18 @@ impl<K, V, D> Hrc<K, V, D> {
     /// A value of at least `2` is recommended for `freshens`.
     pub fn freshens(self, freshens: usize) -> Self {
         Self { freshens, ..self }
+    }
+
+    /// Default value: `false`
+    ///
+    /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
+    /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
+    /// distance functions. If your distance function is expensive, benchmark HRC with this parameter set to `true`.
+    pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
+        Self {
+            exclude_all_searched,
+            ..self
+        }
     }
 
     /// Get the (key, value) pair of a node.
@@ -559,11 +574,11 @@ where
         let mut bests = vec![(from.weak(), from_distance, false)];
 
         // This set is used to more quickly determine if a node is contained in the best set.
-        let mut bests_set = HashSet::with_capacity_and_hasher(
+        let mut exclude = HashSet::with_capacity_and_hasher(
             num.saturating_mul(2),
             RandomState::with_seeds(0, 0, 0, 0),
         );
-        bests_set.insert(from);
+        exclude.insert(from);
 
         loop {
             if let Some((previous_node, _, searched)) =
@@ -576,7 +591,7 @@ where
                 for HrcEdge { key, neighbor } in previous_node.as_slice() {
                     // TODO: Try this as a BTreeSet.
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
-                    if bests_set.contains(neighbor) {
+                    if exclude.contains(neighbor) {
                         continue;
                     }
 
@@ -590,18 +605,23 @@ where
                             }),
                             (neighbor.weak(), distance, false),
                         );
-                        bests_set.insert(neighbor.weak());
+                        exclude.insert(neighbor.weak());
                     } else if distance < bests.last().unwrap().1 {
                         // Otherwise only add it if its better than the worst item we have.
-                        let (old_node, _, _) = bests.pop().unwrap();
-                        bests_set.remove(&old_node);
+                        // Remove the worst item we have now and exclude it if exclude_all_searched is set.
+                        if self.exclude_all_searched {
+                            let (old_node, _, _) = bests.pop().unwrap();
+                            exclude.remove(&old_node);
+                        } else {
+                            bests.pop();
+                        }
+                        exclude.insert(neighbor.weak());
                         bests.insert(
                             bests.partition_point(|&(_, best_distance, _)| {
                                 best_distance <= distance
                             }),
                             (neighbor.weak(), distance, false),
                         );
-                        bests_set.insert(neighbor.weak());
                     }
                 }
             } else {
