@@ -35,10 +35,10 @@ impl<K> HVec<K> {
         unsafe { Self(self.0.weak()) }
     }
 
-    fn neighbors_mut(&mut self) -> impl Iterator<Item = &mut Self> + '_ {
-        self.as_mut_slice()
-            .iter_mut()
-            .map(|HrcEdge { neighbor, .. }| neighbor)
+    fn contains(&self, other: &Self) -> bool {
+        self.as_slice()
+            .iter()
+            .any(|edge| edge.neighbor.is(other.ptr()))
     }
 }
 
@@ -234,13 +234,18 @@ where
     }
 
     /// Updates the `HeaderVecWeak` in neighbors of this node.
-    fn update_weak(&mut self, mut node: HVec<K>, previous: *const ()) {
+    fn update_weak(&mut self, mut node: HVec<K>, previous: *const (), add_last: bool) {
+        let old_len = if add_last { node.len() } else { node.len() - 1 };
         let weak = node.weak();
-        for neighbor in node.neighbors_mut() {
-            for neighbor_neighbor in neighbor.neighbors_mut() {
-                if neighbor_neighbor.is(previous) {
-                    *neighbor_neighbor = weak.weak();
-                }
+        for HrcEdge { neighbor, .. } in &mut node[..old_len] {
+            if let Some(edge) = neighbor
+                .as_mut_slice()
+                .iter_mut()
+                .find(|edge| edge.neighbor.is(previous))
+            {
+                edge.neighbor = weak.weak();
+            } else {
+                panic!("fatal; we did not find the edge in the neighbor");
             }
         }
     }
@@ -254,13 +259,14 @@ where
             key: b_key,
             neighbor: b.weak(),
         };
+        // Insert it onto the end.
         if let Some(previous) = a.push(edge) {
             // Update the strong reference first.
             unsafe {
                 self.nodes[a.node].layers[layer].update(a.weak().0);
             }
             // Update the neighbors.
-            self.update_weak(a.weak(), previous);
+            self.update_weak(a.weak(), previous, false);
         }
 
         // Add the edge from b to a.
@@ -268,13 +274,14 @@ where
             key: a_key,
             neighbor: a.weak(),
         };
+        // Insert it onto the end.
         if let Some(previous) = b.push(edge) {
             // Update the strong reference first.
             unsafe {
                 self.nodes[b.node].layers[layer].update(b.weak().0);
             }
             // Update the neighbors.
-            self.update_weak(b.weak(), previous);
+            self.update_weak(b.weak(), previous, true);
         }
 
         self.edges += 1;
@@ -290,8 +297,7 @@ where
     }
 
     fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) -> bool {
-        let b_ptr = b.ptr();
-        if !a.neighbors_mut().any(|neighbor| neighbor.is(b_ptr)) {
+        if !a.contains(b) {
             self.add_edge_weak(layer, a, b);
             true
         } else {
@@ -380,6 +386,7 @@ where
             key: key.clone(),
             node,
         });
+        // TODO: Create the node using HeaderVec::with_capacity().
         self.nodes.push(HrcNode {
             key: key.clone(),
             value,
@@ -516,6 +523,7 @@ where
                 // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = previous_node.weak();
                 for HrcEdge { key, neighbor } in previous_node.as_slice() {
+                    // TODO: Try this as a BTreeSet.
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
                     if bests.iter().any(|(node, _, _)| neighbor.is(node.ptr())) {
                         continue;
