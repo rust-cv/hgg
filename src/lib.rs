@@ -174,6 +174,14 @@ impl<K, V, D> Hrc<K, V, D> {
         histograms
     }
 
+    pub fn average_neighbors(&self) -> Vec<f64> {
+        self.edges()
+            .into_iter()
+            .zip(self.histogram_layer_nodes())
+            .map(|(edges, nodes)| edges as f64 * 2.0 / nodes as f64)
+            .collect()
+    }
+
     pub fn simple_representation(&self) -> Vec<Vec<Vec<usize>>> {
         let mut layers = vec![vec![]; self.layers()];
         for node in &self.nodes {
