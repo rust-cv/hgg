@@ -21,6 +21,7 @@ struct Record {
     num_queries: usize,
     seconds_per_query: f64,
     queries_per_second: f64,
+    strategy: &'static str,
 }
 
 struct Dataset {
@@ -106,9 +107,10 @@ fn main() {
             new_search_items.len() as f64 / (end_time - start_time).as_secs_f64()
         );
 
-        eprintln!("Histogram: {:?}", hrc.histogram());
         let average_neighbors = hrc.edges() as f64 * 2.0 / hrc.len() as f64;
         eprintln!("Average neighbors: {}", average_neighbors);
+        eprintln!("Histogram layer nodes: {:?}", hrc.histogram_layer_nodes());
+        eprintln!("Histogram neighbors: {:?}", hrc.histogram_neighbors());
 
         eprintln!("Computing correct nearest neighbors for recall calculation");
         let correct_nn_distances: Vec<u32> = test
@@ -124,41 +126,59 @@ fn main() {
         eprintln!("Finished computing the correct nearest neighbors");
 
         for knn in 1..=HIGHEST_KNN {
-            eprintln!("doing size {} with knn {}", 1 << pow, knn);
-            let start_time = Instant::now();
-            let hrc_nn_distances: Vec<u32> = test
-                .iter()
-                .map(|query| {
-                    hrc.search_layer_knn_from(0, 0, query, knn)
-                        .next()
-                        .unwrap()
-                        .1
-                })
-                .collect();
-            let end_time = Instant::now();
-            let num_correct = correct_nn_distances
-                .iter()
-                .copied()
-                .zip(hrc_nn_distances)
-                .filter(|&(correct_distance, hrc_distance)| correct_distance == hrc_distance)
-                .count();
-            let recall = num_correct as f64 / test.len() as f64;
-            let seconds_per_query = (end_time - start_time)
-                .div_f64(test.len() as f64)
-                .as_secs_f64();
-            let queries_per_second = seconds_per_query.recip();
-            csv_out
-                .serialize(Record {
-                    recall,
-                    search_size: 1 << pow,
-                    knn,
-                    num_queries: test.len(),
-                    seconds_per_query,
-                    queries_per_second,
-                })
-                .expect("failed to serialize record");
-            csv_out.flush().expect("failed to flush record");
-            eprintln!("finished size {} with knn {}", 1 << pow, knn);
+            for &strategy in &["zero", "regular", "wide"] {
+                eprintln!(
+                    "doing strategy \"{}\" size {} with knn {}",
+                    strategy,
+                    1 << pow,
+                    knn
+                );
+                let start_time = Instant::now();
+                let hrc_nn_distances: Vec<u32> = match strategy {
+                    "zero" => test
+                        .iter()
+                        .map(|query| {
+                            hrc.search_layer_knn_from(0, 0, query, knn)
+                                .next()
+                                .unwrap()
+                                .1
+                        })
+                        .collect(),
+                    "regular" => test
+                        .iter()
+                        .map(|query| hrc.search_knn(query, knn).next().unwrap().1)
+                        .collect(),
+                    "wide" => test
+                        .iter()
+                        .map(|query| hrc.search_knn_wide(query, knn).next().unwrap().1)
+                        .collect(),
+                    _ => panic!("unexpected stratgy {}", strategy),
+                };
+                let end_time = Instant::now();
+                let num_correct = correct_nn_distances
+                    .iter()
+                    .copied()
+                    .zip(hrc_nn_distances)
+                    .filter(|&(correct_distance, hrc_distance)| correct_distance == hrc_distance)
+                    .count();
+                let recall = num_correct as f64 / test.len() as f64;
+                let seconds_per_query = (end_time - start_time)
+                    .div_f64(test.len() as f64)
+                    .as_secs_f64();
+                let queries_per_second = seconds_per_query.recip();
+                csv_out
+                    .serialize(Record {
+                        recall,
+                        search_size: 1 << pow,
+                        knn,
+                        num_queries: test.len(),
+                        seconds_per_query,
+                        queries_per_second,
+                        strategy,
+                    })
+                    .expect("failed to serialize record");
+                csv_out.flush().expect("failed to flush record");
+            }
         }
     }
 }

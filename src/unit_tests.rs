@@ -30,7 +30,7 @@ fn random_insertion_stats() {
         hrc.insert(key, ());
     }
 
-    eprintln!("Histogram: {:?}", hrc.histogram());
+    eprintln!("Histogram: {:?}", hrc.histogram_neighbors());
 
     for (ix, key) in keys.iter().enumerate() {
         if ix % 100 == 0 {

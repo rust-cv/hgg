@@ -145,7 +145,17 @@ impl<K, V, D> Hrc<K, V, D> {
         }
     }
 
-    pub fn histogram(&self) -> Vec<Vec<(usize, usize)>> {
+    pub fn histogram_layer_nodes(&self) -> Vec<usize> {
+        let mut layers = vec![0; self.layers()];
+        for node in &self.nodes {
+            for layer in &mut layers[0..node.layers()] {
+                *layer += 1;
+            }
+        }
+        layers
+    }
+
+    pub fn histogram_neighbors(&self) -> Vec<Vec<(usize, usize)>> {
         let mut histograms = vec![];
         for layer in 0..self.layers() {
             let mut histogram = vec![];
@@ -197,7 +207,7 @@ where
     /// The user should use a `k` value that corresponds to the recall they desire for the number
     /// of actual neighbors they want.
     pub fn optimal_k(&self) -> usize {
-        (self.edges + 1).saturating_mul(3) / self.len()
+        (self.edges + 1).saturating_mul(5) / 2 / self.len()
     }
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
@@ -244,27 +254,25 @@ where
     /// with the final nearest neighbors on every layer it searched.
     ///
     /// Returns a vector over the layers, with each layer having several `(node, distance)`.
-    pub fn search_knn_wide_path(&self, query: &K, num: usize) -> Vec<Vec<(usize, D)>> {
+    fn search_knn_wide_path(&self, query: &K, num: usize) -> Vec<Vec<(HVec<K>, D, bool)>> {
         if self.is_empty() {
             return vec![];
         }
         let num_layers = self.layers();
-        let mut layers: Vec<Vec<(usize, D)>> = iter::repeat(vec![])
+        let mut layers: Vec<Vec<(HVec<K>, D, bool)>> = iter::repeat_with(Vec::new)
             .take(num_layers - 1)
             .chain(Some(vec![(
-                self.root,
+                self.layer_node_weak(num_layers - 1, self.root),
                 self.nodes[self.root].key.distance(query).as_(),
+                true,
             )]))
             .collect();
         // This assumes that the top layer only contains one node (as it should).
         for layer in (0..num_layers - 1).rev() {
-            let (node, distance) = layers[layer + 1][0];
-            let node = self.layer_node_weak(layer, node);
-            layers[layer] = self
-                .search_layer_knn_from_weak(node, distance, query, num)
-                .into_iter()
-                .map(|(node, distance, _)| (node.node, distance))
-                .collect();
+            let node = layers[layer + 1][0].0.weak();
+            let distance = layers[layer + 1][0].1;
+            let node = self.layer_node_weak(layer, node.node);
+            layers[layer] = self.search_layer_knn_from_weak(node, distance, query, num);
         }
         layers
     }
@@ -346,14 +354,10 @@ where
         // The current freshest node's `next` is the stalest node, which will subsequently become
         // the freshest when freshened. If this is the only node, looking up the freshest node will fail.
         // Due to that, we set this node's next to itself if its the only node.
-        let node_header_vec = HeaderVec::new(HrcHeader {
-            key: key.clone(),
-            node,
-        });
         self.nodes.push(HrcNode {
             key: key.clone(),
             value,
-            layers: vec![node_header_vec],
+            layers: vec![],
             next: if node == 0 {
                 0
             } else {
@@ -367,25 +371,65 @@ where
         self.freshest = node;
 
         if node == 0 {
+            // Push the new layer 0.
+            self.nodes[node]
+                .layers
+                .push(HeaderVec::new(HrcHeader { key, node }));
+            // Set the root.
+            self.root = 0;
             return 0;
         }
 
         // Find nearest neighbor via greedy search.
-        let mut knn: Vec<_> = self
-            .search_layer_knn_from(0, 0, &key, self.optimal_k())
-            .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
-            .collect();
+        let knn_layers = self.search_knn_wide_path(&key, self.optimal_k());
 
-        // Add edge to nearest neighbor.
-        self.layer_add_edge(0, knn[0].0, node);
+        for (layer, knn_weak) in knn_layers.into_iter().enumerate() {
+            // Add the new layer to this node.
+            self.nodes[node].layers.push(HeaderVec::new(HrcHeader {
+                key: key.clone(),
+                node,
+            }));
 
-        // The initial neighbors only includes the edge we just added.
-        let mut neighbors = Vec::with_capacity(self.optimal_k());
-        neighbors.push(knn[0].1.clone());
+            // Get the kNN as (node, key) pairs.
+            let mut knn: Vec<(usize, K)> = knn_weak
+                .iter()
+                .map(|(node, _, _)| (node.node, node.key.clone()))
+                .collect();
 
-        // Optimize its edges using stalest nodes.
-        let mut node_weak = self.layer_node_weak(0, node);
-        self.optimize_layer_neighborhood(0, &mut node_weak, &mut knn, &mut neighbors);
+            // Add edge to nearest neighbor.
+            self.layer_add_edge(layer, knn[0].0, node);
+
+            // If we are on the last layer, we now have exactly two nodes on the last layer,
+            // and it is time to create a new layer.
+            if layer == self.layers() - 1 {
+                // Set the root to this node.
+                self.root = node;
+                // Create the new layer (totally empty).
+                self.nodes[node].layers.push(HeaderVec::new(HrcHeader {
+                    key: key.clone(),
+                    node,
+                }));
+            }
+
+            // The initial neighbors only includes the edge we just added.
+            let mut neighbors = Vec::with_capacity(self.optimal_k());
+            neighbors.push(knn[0].1.clone());
+
+            // Optimize its edges using stalest nodes.
+            let mut node_weak = self.layer_node_weak(layer, node);
+            self.optimize_layer_neighborhood(layer, &mut node_weak, &mut knn, &mut neighbors);
+
+            // Check if any surrounding nodes are on the next layer.
+            if self
+                .layer_node_weak(layer, node)
+                .as_slice()
+                .iter()
+                .any(|HrcEdge { neighbor, .. }| self.nodes[neighbor.node].layers() > layer + 1)
+            {
+                // If any of the neighbors are on the next layer up, we don't need to add this node to more layers.
+                break;
+            }
+        }
 
         // Freshen the graph to clean up older nodes.
         self.freshen();
@@ -434,6 +478,7 @@ where
     pub fn freshen(&mut self) {
         let freshens = self.freshens;
         for node in self.stales().take(freshens).collect::<Vec<_>>() {
+            // TODO: Remove node from a layer if all of its neighbors have another neighbor on the next layer.
             for layer in 0..self.nodes[node].layers() {
                 self.optimize_layer_node(layer, node);
             }
