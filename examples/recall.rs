@@ -128,7 +128,12 @@ fn main() {
             let start_time = Instant::now();
             let hrc_nn_distances: Vec<u32> = test
                 .iter()
-                .map(|query| hrc.search_knn_from(0, 0, query, knn).next().unwrap().1)
+                .map(|query| {
+                    hrc.search_layer_knn_from(0, 0, query, knn)
+                        .next()
+                        .unwrap()
+                        .1
+                })
                 .collect();
             let end_time = Instant::now();
             let num_correct = correct_nn_distances

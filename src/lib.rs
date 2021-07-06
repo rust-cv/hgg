@@ -47,6 +47,8 @@ pub struct Hrc<K, V, D = u64> {
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
     nodes: Vec<HrcNode<K, V>>,
+    /// This node exists on the top layer, and is the root of all searches.
+    root: usize,
     /// The node which has been cleaned up/inserted most recently.
     freshest: usize,
     /// The number of edges in the graph.
@@ -66,6 +68,7 @@ impl<K, V, D> Hrc<K, V, D> {
     pub fn new() -> Self {
         Self {
             nodes: vec![],
+            root: 0,
             freshest: 0,
             edges: 0,
             most_edges: 0,
@@ -133,42 +136,48 @@ impl<K, V, D> Hrc<K, V, D> {
         self.edges
     }
 
+    /// Returns the number of layers in the graph.
+    pub fn layers(&self) -> usize {
+        if self.is_empty() {
+            0
+        } else {
+            self.nodes[self.root].layers()
+        }
+    }
+
     pub fn histogram(&self) -> Vec<Vec<(usize, usize)>> {
         let mut histograms = vec![];
-        for layer in 0.. {
+        for layer in 0..self.layers() {
             let mut histogram = vec![];
-            for edges in self.nodes.iter().filter_map(|node| {
-                if node.layers() > layer {
-                    Some(node.layers[layer].len())
-                } else {
-                    None
-                }
-            }) {
+            for edges in self
+                .nodes
+                .iter()
+                .filter_map(|node| node.layers.get(layer).map(|layer_node| layer_node.len()))
+            {
                 match histogram.binary_search_by_key(&edges, |&(search_edges, _)| search_edges) {
                     Ok(pos) => histogram[pos].1 += 1,
                     Err(pos) => histogram.insert(pos, (edges, 1)),
                 }
             }
-            if histogram.is_empty() {
-                break;
-            } else {
-                histograms.push(histogram);
-            }
+            histograms.push(histogram);
         }
         histograms
     }
 
-    pub fn simple_representation(&self) -> Vec<Vec<usize>> {
-        self.nodes
-            .iter()
-            .map(|node| {
-                node.layers[0]
-                    .as_slice()
-                    .iter()
-                    .map(|HrcEdge { neighbor, .. }| neighbor.node)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
+    pub fn simple_representation(&self) -> Vec<Vec<Vec<usize>>> {
+        let mut layers = vec![vec![]; self.layers()];
+        for node in &self.nodes {
+            for (layer, layer_node) in node.layers.iter().enumerate() {
+                layers[layer].push(
+                    layer_node
+                        .as_slice()
+                        .iter()
+                        .map(|HrcEdge { neighbor, .. }| neighbor.node)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        layers
     }
 }
 
@@ -196,33 +205,33 @@ where
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    pub fn search(&self, layer: usize, query: &K) -> Option<(usize, D)> {
+    pub fn search_layer(&self, layer: usize, query: &K) -> Option<(usize, D)> {
         if self.is_empty() {
             None
         } else {
-            Some(self.search_from(layer, 0, query))
+            Some(self.search_layer_from(layer, 0, query))
         }
     }
 
     /// Finds the knn greedily.
     ///
     /// Returns (node, distance) pairs from closest to furthest.
-    pub fn search_knn(
+    pub fn search_layer_knn(
         &self,
         layer: usize,
         query: &K,
         num: usize,
     ) -> impl Iterator<Item = (usize, D)> + '_ {
-        self.search_knn_from(layer, 0, query, num)
+        self.search_layer_knn_from(layer, 0, query, num)
     }
 
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_from(&self, layer: usize, from: usize, query: &K) -> (usize, D) {
+    pub fn search_layer_from(&self, layer: usize, from: usize, query: &K) -> (usize, D) {
         // Get the weak node that corresponds to the given node on its particular layer.
-        let (weak, distance) = self.search_from_weak(
-            self.node_weak(layer, from),
+        let (weak, distance) = self.search_layer_from_weak(
+            self.layer_node_weak(layer, from),
             query.distance(&self.nodes[from].key).as_(),
             query,
         );
@@ -233,15 +242,15 @@ where
     /// Finds the knn greedily from a starting node `from`.
     ///
     /// Returns (node, distance) pairs from closest to furthest.
-    pub fn search_knn_from(
+    pub fn search_layer_knn_from(
         &self,
         layer: usize,
         from: usize,
         query: &K,
         num: usize,
     ) -> impl Iterator<Item = (usize, D)> + '_ {
-        self.search_knn_from_weak(
-            self.node_weak(layer, from),
+        self.search_layer_knn_from_weak(
+            self.layer_node_weak(layer, from),
             query.distance(&self.nodes[from].key).as_(),
             query,
             num,
@@ -251,13 +260,13 @@ where
     }
 
     /// Finds the knn of `node` greedily.
-    pub fn search_knn_of(
+    pub fn search_layer_knn_of(
         &self,
         layer: usize,
         node: usize,
         num: usize,
     ) -> impl Iterator<Item = (usize, D)> + '_ {
-        self.search_knn_from(layer, node, &self.nodes[node].key, num)
+        self.search_layer_knn_from(layer, node, &self.nodes[node].key, num)
     }
 
     /// Insert a (key, value) pair.
@@ -294,23 +303,23 @@ where
 
         // Find nearest neighbor via greedy search.
         let mut knn: Vec<_> = self
-            .search_knn_from(layer, 0, &key, self.optimal_k())
+            .search_layer_knn_from(layer, 0, &key, self.optimal_k())
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
 
         // Add edge to nearest neighbor.
-        self.add_edge(layer, knn[0].0, node);
+        self.layer_add_edge(layer, knn[0].0, node);
 
         // The initial neighbors only includes the edge we just added.
         let mut neighbors = Vec::with_capacity(self.optimal_k());
         neighbors.push(knn[0].1.clone());
 
         // Optimize its edges using stalest nodes.
-        let mut node_weak = self.node_weak(layer, node);
-        self.optimize_neighborhood(layer, &mut node_weak, &mut knn, &mut neighbors);
+        let mut node_weak = self.layer_node_weak(layer, node);
+        self.optimize_layer_neighborhood(layer, &mut node_weak, &mut knn, &mut neighbors);
 
         // Freshen the graph to clean up older nodes.
-        self.freshen(layer);
+        self.freshen();
 
         node
     }
@@ -332,35 +341,37 @@ where
         self.nodes[a].key.distance(&self.nodes[b].key).as_()
     }
 
-    /// Optimizes a number of stale nodes equal to `self.freshens`.
-    ///
-    /// You do not need to call this yourself, as it is called on insert.
-    pub fn freshen(&mut self, layer: usize) {
-        let freshens = self.freshens;
-        for node in self.stales().take(freshens).collect::<Vec<_>>() {
-            self.optimize_node(layer, node);
-        }
-    }
-
     /// Trims everything from a node that is no longer needed, and then only adds back what is needed.
-    pub fn optimize_node(&mut self, layer: usize, node: usize) {
+    pub fn optimize_layer_node(&mut self, layer: usize, node: usize) {
         let mut knn: Vec<_> = self
-            .search_knn_of(layer, node, self.optimal_k())
+            .search_layer_knn_of(layer, node, self.optimal_k())
             .skip(1)
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
-        self.reinsert(layer, node);
-        let mut node = self.node_weak(layer, node);
+        self.layer_reinsert(layer, node);
+        let mut node = self.layer_node_weak(layer, node);
         let mut neighbors = Vec::with_capacity(self.optimal_k());
         neighbors.extend(
             node.as_slice()
                 .iter()
                 .map(|HrcEdge { key, .. }| key.clone()),
         );
-        self.optimize_neighborhood(layer, &mut node, &mut knn, &mut neighbors);
+        self.optimize_layer_neighborhood(layer, &mut node, &mut knn, &mut neighbors);
     }
 
-    fn node_weak(&self, layer: usize, node: usize) -> HVec<K> {
+    /// Optimizes a number of stale nodes equal to `self.freshens`.
+    ///
+    /// You do not need to call this yourself, as it is called on insert.
+    pub fn freshen(&mut self) {
+        let freshens = self.freshens;
+        for node in self.stales().take(freshens).collect::<Vec<_>>() {
+            for layer in 0..self.nodes[node].layers() {
+                self.optimize_layer_node(layer, node);
+            }
+        }
+    }
+
+    fn layer_node_weak(&self, layer: usize, node: usize) -> HVec<K> {
         unsafe { HVec(self.nodes[node].layers[layer].weak()) }
     }
 
@@ -376,12 +387,12 @@ where
             {
                 edge.neighbor = weak.weak();
             } else {
-                panic!("fatal; we did not find the edge in the neighbor");
+                unreachable!("fatal; we did not find the edge in the neighbor");
             }
         }
     }
 
-    fn add_edge_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
+    fn layer_add_edge_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
         let a_key = a.key.clone();
         let b_key = b.key.clone();
 
@@ -419,17 +430,22 @@ where
         self.most_edges = cmp::max(self.most_edges, cmp::max(a.len(), b.len()));
     }
 
-    fn add_edge(&mut self, layer: usize, a: usize, b: usize) {
-        self.add_edge_weak(
+    fn layer_add_edge(&mut self, layer: usize, a: usize, b: usize) {
+        self.layer_add_edge_weak(
             layer,
-            &mut self.node_weak(layer, a),
-            &mut self.node_weak(layer, b),
+            &mut self.layer_node_weak(layer, a),
+            &mut self.layer_node_weak(layer, b),
         );
     }
 
-    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) -> bool {
+    fn layer_add_edge_dedup_weak(
+        &mut self,
+        layer: usize,
+        a: &mut HVec<K>,
+        b: &mut HVec<K>,
+    ) -> bool {
         if !a.contains(b) {
-            self.add_edge_weak(layer, a, b);
+            self.layer_add_edge_weak(layer, a, b);
             true
         } else {
             false
@@ -439,7 +455,7 @@ where
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     ///
     /// Returns `(node, distance)`.
-    fn search_from_weak(&self, from: HVec<K>, from_distance: D, query: &K) -> (HVec<K>, D) {
+    fn search_layer_from_weak(&self, from: HVec<K>, from_distance: D, query: &K) -> (HVec<K>, D) {
         let mut best_weak = from;
         let mut best_distance = from_distance;
 
@@ -460,7 +476,7 @@ where
     /// Finds the knn greedily from a starting node `from`.
     ///
     /// Returns (node, distance, searched) pairs. `searched` will always be true, so you can ignore it.
-    fn search_knn_from_weak(
+    fn search_layer_knn_from_weak(
         &self,
         from: HVec<K>,
         from_distance: D,
@@ -471,7 +487,7 @@ where
             return vec![];
         }
         // Perform a greedy search first to save time.
-        let (from, from_distance) = self.search_from_weak(from, from_distance, query);
+        let (from, from_distance) = self.search_layer_from_weak(from, from_distance, query);
         // Contains the index and the distance as a pair.
         let mut bests = vec![(from.weak(), from_distance, false)];
 
@@ -533,14 +549,14 @@ where
     }
 
     /// Finds the knn of `node` greedily. The first item in the returned vec will always be this node.
-    fn search_knn_of_weak(&self, node: HVec<K>, num: usize) -> Vec<(HVec<K>, D, bool)> {
+    fn search_layer_knn_of_weak(&self, node: HVec<K>, num: usize) -> Vec<(HVec<K>, D, bool)> {
         let key = &node.key;
-        self.search_knn_from_weak(node.weak(), 0.as_(), key, num)
+        self.search_layer_knn_from_weak(node.weak(), 0.as_(), key, num)
     }
 
     /// Optimizes a node by discovering local minima, and then breaking through all the local minima
     /// to the closest neighbor which is closer to the target.
-    fn optimize_neighborhood(
+    fn optimize_layer_neighborhood(
         &mut self,
         layer: usize,
         node: &mut HVec<K>,
@@ -554,7 +570,11 @@ where
             // Check if the node is colocated.
             if to_beat == 0.as_() {
                 // In this case, add an edge (with dedup) between them to make sure there is a path.
-                self.add_edge_dedup_weak(layer, node, &mut self.node_weak(layer, target_node));
+                self.layer_add_edge_dedup_weak(
+                    layer,
+                    node,
+                    &mut self.layer_node_weak(layer, target_node),
+                );
                 knn_index += 1;
                 continue 'knn_next;
             }
@@ -576,7 +596,11 @@ where
                     let nn_distance = nn_key.distance(&target_key).as_();
                     // Add the node as a neighbor (closer or not).
                     // This will update the weak ref if necessary.
-                    if self.add_edge_dedup_weak(layer, &mut self.node_weak(layer, nn), node) {
+                    if self.layer_add_edge_dedup_weak(
+                        layer,
+                        &mut self.layer_node_weak(layer, nn),
+                        node,
+                    ) {
                         neighbors.push(nn_key);
                     }
                     // Check if this node is closer to the target than `from`.
@@ -594,7 +618,7 @@ where
                 }
                 // Double the knn space.
                 *knn = self
-                    .search_knn_of_weak(node.weak(), (knn.len() + 1).saturating_mul(2))
+                    .search_layer_knn_of_weak(node.weak(), (knn.len() + 1).saturating_mul(2))
                     .into_iter()
                     .skip(1)
                     .map(|(nn, _, _)| (nn.node, nn.key.clone()))
@@ -616,13 +640,13 @@ where
     /// Removes a node from the graph and then reinserts it with the minimum number of edges on a particular layer.
     ///
     /// It is recommended to use [`Hrc::freshen`] instead of this method.
-    fn reinsert(&mut self, layer: usize, node: usize) {
+    fn layer_reinsert(&mut self, layer: usize, node: usize) {
         // This wont work if we only have 1 node.
         if self.len() == 1 {
             return;
         }
 
-        let mut node = self.node_weak(layer, node);
+        let mut node = self.layer_node_weak(layer, node);
         let node_key = node.key.clone();
 
         // Disconnect the node.
@@ -633,15 +657,18 @@ where
 
         // Make sure each neighbor can connect greedily to prevent disconnected graphs.
         for (neighbor, distance) in neighbors {
-            let (mut nn, _) =
-                self.search_from_weak(self.node_weak(layer, neighbor), distance, &node_key);
+            let (mut nn, _) = self.search_layer_from_weak(
+                self.layer_node_weak(layer, neighbor),
+                distance,
+                &node_key,
+            );
             if !nn.is(node.ptr()) {
-                self.add_edge_dedup_weak(layer, &mut nn, &mut node);
+                self.layer_add_edge_dedup_weak(layer, &mut nn, &mut node);
             }
         }
     }
 
-    /// Internal function for disconnecting a node from the graph.
+    /// Internal function for disconnecting a node from the graph on the layer this HVec exists on.
     ///
     /// Returns nodes as usize because as nodes are re-added, it is possible that neighbors reallocate
     /// and break the weak pointers.

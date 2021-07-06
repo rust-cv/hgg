@@ -37,7 +37,7 @@ fn random_insertion_stats() {
             eprintln!("Searching {}", ix);
         }
         // Search each key.
-        let (_, distance) = hrc.search_knn(0, key, 5).next().unwrap();
+        let (_, distance) = hrc.search_layer_knn(0, key, 5).next().unwrap();
         // Make sure that the best result is this key.
         assert_eq!(distance, 0);
     }
