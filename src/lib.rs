@@ -207,7 +207,7 @@ where
     /// The user should use a `k` value that corresponds to the recall they desire for the number
     /// of actual neighbors they want.
     pub fn optimal_k(&self) -> usize {
-        (self.edges + 1).saturating_mul(5) / 2 / self.len()
+        (self.edges + 1).saturating_mul(3) / self.len()
     }
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
