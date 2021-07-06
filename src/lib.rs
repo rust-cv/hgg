@@ -189,82 +189,6 @@ where
         (self.edges + 1).saturating_mul(3) / self.len()
     }
 
-    fn node_weak(&self, layer: usize, node: usize) -> HVec<K> {
-        unsafe { HVec(self.nodes[node].layers[layer].weak()) }
-    }
-
-    /// Updates the `HeaderVecWeak` in neighbors of this node.
-    fn update_weak(&mut self, mut node: HVec<K>, previous: *const (), add_last: bool) {
-        let old_len = if add_last { node.len() } else { node.len() - 1 };
-        let weak = node.weak();
-        for HrcEdge { neighbor, .. } in &mut node[..old_len] {
-            if let Some(edge) = neighbor
-                .as_mut_slice()
-                .iter_mut()
-                .find(|edge| edge.neighbor.is(previous))
-            {
-                edge.neighbor = weak.weak();
-            } else {
-                panic!("fatal; we did not find the edge in the neighbor");
-            }
-        }
-    }
-
-    fn add_edge_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
-        let a_key = a.key.clone();
-        let b_key = b.key.clone();
-
-        // Add the edge from a to b.
-        let edge = HrcEdge {
-            key: b_key,
-            neighbor: b.weak(),
-        };
-        // Insert it onto the end.
-        if let Some(previous) = a.push(edge) {
-            // Update the strong reference first.
-            unsafe {
-                self.nodes[a.node].layers[layer].update(a.weak().0);
-            }
-            // Update the neighbors.
-            self.update_weak(a.weak(), previous, false);
-        }
-
-        // Add the edge from b to a.
-        let edge = HrcEdge {
-            key: a_key,
-            neighbor: a.weak(),
-        };
-        // Insert it onto the end.
-        if let Some(previous) = b.push(edge) {
-            // Update the strong reference first.
-            unsafe {
-                self.nodes[b.node].layers[layer].update(b.weak().0);
-            }
-            // Update the neighbors.
-            self.update_weak(b.weak(), previous, true);
-        }
-
-        self.edges += 1;
-        self.most_edges = cmp::max(self.most_edges, cmp::max(a.len(), b.len()));
-    }
-
-    fn add_edge(&mut self, layer: usize, a: usize, b: usize) {
-        self.add_edge_weak(
-            layer,
-            &mut self.node_weak(layer, a),
-            &mut self.node_weak(layer, b),
-        );
-    }
-
-    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) -> bool {
-        if !a.contains(b) {
-            self.add_edge_weak(layer, a, b);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Searches for the nearest neighbor greedily.
     ///
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
@@ -432,6 +356,82 @@ where
                 .map(|HrcEdge { key, .. }| key.clone()),
         );
         self.optimize_neighborhood(layer, &mut node, &mut knn, &mut neighbors);
+    }
+
+    fn node_weak(&self, layer: usize, node: usize) -> HVec<K> {
+        unsafe { HVec(self.nodes[node].layers[layer].weak()) }
+    }
+
+    /// Updates the `HeaderVecWeak` in neighbors of this node.
+    fn update_weak(&mut self, mut node: HVec<K>, previous: *const (), add_last: bool) {
+        let old_len = if add_last { node.len() } else { node.len() - 1 };
+        let weak = node.weak();
+        for HrcEdge { neighbor, .. } in &mut node[..old_len] {
+            if let Some(edge) = neighbor
+                .as_mut_slice()
+                .iter_mut()
+                .find(|edge| edge.neighbor.is(previous))
+            {
+                edge.neighbor = weak.weak();
+            } else {
+                panic!("fatal; we did not find the edge in the neighbor");
+            }
+        }
+    }
+
+    fn add_edge_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) {
+        let a_key = a.key.clone();
+        let b_key = b.key.clone();
+
+        // Add the edge from a to b.
+        let edge = HrcEdge {
+            key: b_key,
+            neighbor: b.weak(),
+        };
+        // Insert it onto the end.
+        if let Some(previous) = a.push(edge) {
+            // Update the strong reference first.
+            unsafe {
+                self.nodes[a.node].layers[layer].update(a.weak().0);
+            }
+            // Update the neighbors.
+            self.update_weak(a.weak(), previous, false);
+        }
+
+        // Add the edge from b to a.
+        let edge = HrcEdge {
+            key: a_key,
+            neighbor: a.weak(),
+        };
+        // Insert it onto the end.
+        if let Some(previous) = b.push(edge) {
+            // Update the strong reference first.
+            unsafe {
+                self.nodes[b.node].layers[layer].update(b.weak().0);
+            }
+            // Update the neighbors.
+            self.update_weak(b.weak(), previous, true);
+        }
+
+        self.edges += 1;
+        self.most_edges = cmp::max(self.most_edges, cmp::max(a.len(), b.len()));
+    }
+
+    fn add_edge(&mut self, layer: usize, a: usize, b: usize) {
+        self.add_edge_weak(
+            layer,
+            &mut self.node_weak(layer, a),
+            &mut self.node_weak(layer, b),
+        );
+    }
+
+    fn add_edge_dedup_weak(&mut self, layer: usize, a: &mut HVec<K>, b: &mut HVec<K>) -> bool {
+        if !a.contains(b) {
+            self.add_edge_weak(layer, a, b);
+            true
+        } else {
+            false
+        }
     }
 
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
