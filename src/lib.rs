@@ -59,6 +59,8 @@ pub struct Hrc<K, V, D = u64> {
     freshens: usize,
     /// Whether to exclude all keys for which the distance has been calculated in kNN search.
     exclude_all_searched: bool,
+    /// Determines the number of nearest neighbors used for inserting.
+    insert_knn: usize,
     /// This allows a consistent number to be used for distance storage during usage.
     _phantom: PhantomData<D>,
 }
@@ -74,6 +76,7 @@ impl<K, V, D> Hrc<K, V, D> {
             node_counts: vec![],
             freshens: 1,
             exclude_all_searched: false,
+            insert_knn: 100,
             _phantom: PhantomData,
         }
     }
@@ -108,6 +111,14 @@ impl<K, V, D> Hrc<K, V, D> {
             exclude_all_searched,
             ..self
         }
+    }
+
+    /// Default value: `100`
+    ///
+    /// This controls the number of nearest neighbors used during insertion. Setting this higher will cause the graph
+    /// to become more connected.
+    pub fn insert_knn(self, insert_knn: usize) -> Self {
+        Self { insert_knn, ..self }
     }
 
     /// Get the (key, value) pair of a node.
@@ -209,19 +220,6 @@ where
     D: Copy + Ord + 'static,
     u64: AsPrimitive<D>,
 {
-    /// This gets the "optimal" k for inserting.
-    ///
-    /// This could be used if you want to have a very high recall consistently when searching.
-    ///
-    /// This can be used to see what HRC is using internally for its `k` value during kNN searches.
-    /// This value is not necessarily optimal for searches by the user, and is specifically set to
-    /// prevent an explosion of graph connectivity and prevent a collapse of graph connectivity.
-    /// The user should use a `k` value that corresponds to the recall they desire for the number
-    /// of actual neighbors they want.
-    pub fn optimal_k(&self, layer: usize) -> usize {
-        (self.edges[layer] + 1).saturating_mul(4) / self.node_counts[layer]
-    }
-
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
@@ -401,7 +399,7 @@ where
 
             // Do a knn search on this layer, starting at the found node.
             let mut knn: Vec<(usize, K)> = self
-                .search_layer_knn_from_weak(found, distance, &key, self.optimal_k(layer))
+                .search_layer_knn_from_weak(found, distance, &key, self.insert_knn)
                 .into_iter()
                 .map(|(node, _, _)| (node.node, node.key.clone()))
                 .collect();
@@ -424,7 +422,7 @@ where
             }
 
             // The initial neighbors only includes the edge we just added.
-            let mut neighbors = Vec::with_capacity(self.optimal_k(layer));
+            let mut neighbors = Vec::with_capacity(self.insert_knn);
             neighbors.push(knn[0].1.clone());
 
             // Optimize its edges using stalest nodes.
@@ -469,13 +467,13 @@ where
     /// Trims everything from a node that is no longer needed, and then only adds back what is needed.
     pub fn optimize_layer_node(&mut self, layer: usize, node: usize) {
         let mut knn: Vec<_> = self
-            .search_layer_knn_of(layer, node, self.optimal_k(layer))
+            .search_layer_knn_of(layer, node, self.insert_knn)
             .skip(1)
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
         self.layer_reinsert(layer, node);
         let mut node = self.layer_node_weak(layer, node);
-        let mut neighbors = Vec::with_capacity(self.optimal_k(layer));
+        let mut neighbors = Vec::with_capacity(self.insert_knn);
         neighbors.extend(
             node.as_slice()
                 .iter()
