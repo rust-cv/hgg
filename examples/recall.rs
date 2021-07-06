@@ -109,8 +109,9 @@ fn main() {
 
         let average_neighbors: Vec<_> = hrc
             .edges()
-            .iter()
-            .map(|&edges| edges as f64 * 2.0 / hrc.len() as f64)
+            .into_iter()
+            .zip(hrc.histogram_layer_nodes())
+            .map(|(edges, nodes)| edges as f64 * 2.0 / nodes as f64)
             .collect();
         eprintln!("Average neighbors: {:?}", average_neighbors);
         eprintln!("Histogram layer nodes: {:?}", hrc.histogram_layer_nodes());
