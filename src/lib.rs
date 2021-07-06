@@ -1,120 +1,18 @@
 #![no_std]
 extern crate alloc;
 
+mod hvec;
 #[cfg(test)]
 mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{
-    cmp,
-    fmt::Debug,
-    hash::{Hash, Hasher},
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use core::{cmp, fmt::Debug, marker::PhantomData};
 use hashbrown::HashSet;
-use header_vec::{HeaderVec, HeaderVecWeak};
+use header_vec::HeaderVec;
+use hvec::{HVec, HrcEdge, HrcHeader};
 use num_traits::AsPrimitive;
 use space::MetricPoint;
-
-#[derive(Debug)]
-struct HrcEdge<K> {
-    key: K,
-    neighbor: HVec<K>,
-}
-
-#[derive(Debug)]
-struct HrcHeader<K> {
-    key: K,
-    node: usize,
-}
-
-#[derive(Debug)]
-struct HVec<K>(HeaderVecWeak<HrcHeader<K>, HrcEdge<K>>);
-
-impl<K> HVec<K> {
-    fn weak(&self) -> Self {
-        unsafe { Self(self.0.weak()) }
-    }
-
-    fn contains(&self, other: &Self) -> bool {
-        self.as_slice()
-            .iter()
-            .any(|edge| edge.neighbor.is(other.ptr()))
-    }
-}
-
-impl<K> HVec<K>
-where
-    K: MetricPoint,
-{
-    fn neighbors_distance<'a, D>(&'a self, query: &'a K) -> impl Iterator<Item = (Self, D)> + 'a
-    where
-        D: Copy + Ord + 'static,
-        u64: AsPrimitive<D>,
-    {
-        self.as_slice()
-            .iter()
-            .map(move |HrcEdge { key, neighbor }| (neighbor.weak(), query.distance(key).as_()))
-    }
-}
-
-impl<K> Deref for HVec<K> {
-    type Target = HeaderVecWeak<HrcHeader<K>, HrcEdge<K>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<K> DerefMut for HVec<K> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<K> PartialEq for HVec<K> {
-    fn eq(&self, other: &Self) -> bool {
-        self.ptr().eq(&other.ptr())
-    }
-}
-
-impl<K> Eq for HVec<K> {}
-
-impl<K> PartialOrd for HVec<K> {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.ptr().partial_cmp(&other.ptr())
-    }
-
-    fn lt(&self, other: &Self) -> bool {
-        self.ptr().lt(&other.ptr())
-    }
-    fn le(&self, other: &Self) -> bool {
-        self.ptr().le(&other.ptr())
-    }
-    fn gt(&self, other: &Self) -> bool {
-        self.ptr().gt(&other.ptr())
-    }
-    fn ge(&self, other: &Self) -> bool {
-        self.ptr().ge(&other.ptr())
-    }
-}
-
-impl<K> Ord for HVec<K> {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.ptr().cmp(&other.ptr())
-    }
-}
-
-impl<K> Hash for HVec<K> {
-    fn hash<H>(&self, hasher: &mut H)
-    where
-        H: Hasher,
-    {
-        self.ptr().hash(hasher);
-    }
-}
 
 #[derive(Debug)]
 struct HrcNode<K, V> {
@@ -185,7 +83,8 @@ impl<K, V, D> Hrc<K, V, D> {
     /// too accurate/too connected. If the graph grows too accurate, it worsens the recall curve and the
     /// insertion time will grow at a rate that is closer to exponential. For all intents and purposes,
     /// increasing the hight of the recall curve (Y = queries per second, X = recall) is your primary goal,
-    /// so set `freshens` at the value which does this for your dataset.
+    /// so set `freshens` at the value which does this for your dataset. You can also reduce this temporarily
+    /// to do quick insertions before restoring it to a higher value.
     ///
     /// A value of at least `2` is recommended for `freshens`.
     pub fn freshens(self, freshens: usize) -> Self {
