@@ -72,24 +72,26 @@ impl<K, V, D> Hrc<K, V, D> {
             freshest: 0,
             edges: vec![],
             node_counts: vec![],
-            freshens: 2,
+            freshens: 1,
             exclude_all_searched: false,
             _phantom: PhantomData,
         }
     }
 
-    /// Default value: `2`
+    /// Default value: `1`
     ///
-    /// Increase the parameter `freshens` to freshen stale nodes in the graph. Freshening nodes can improve your
-    /// recall curve. The higher this value, the longer the insert will take. However, in the long run, freshening will
-    /// improve insert performance. Counter-intuitively, if you freshen too infrequently, your graph will become
-    /// too accurate/too connected. If the graph grows too accurate, it worsens the recall curve and the
-    /// insertion time will grow at a rate that is closer to exponential. For all intents and purposes,
-    /// increasing the hight of the recall curve (Y = queries per second, X = recall) is your primary goal,
-    /// so set `freshens` at the value which does this for your dataset. You can also reduce this temporarily
-    /// to do quick insertions before restoring it to a higher value.
+    /// If inserting gets too slow, increase this number to speed up insertion. Increasing it too high might
+    /// severely damage recall curve.
     ///
-    /// A value of at least `2` is recommended for `freshens`.
+    /// Increase the parameter `freshens` to freshen stale nodes in the graph. The higher this value, the longer the
+    /// insert will take. However, in the long run, freshening will substantially improve insert performance.
+    /// Counter-intuitively, if you freshen too infrequently, your graph will become too accurate/too connected.
+    /// If the graph grows too accurate, it worsens the recall curve and the insertion time will grow at a rate
+    /// that is closer to exponential. For all intents and purposes, increasing the hight of the recall curve
+    /// (Y = queries per second, X = recall) is your primary goal, so set `freshens` at the value which does this
+    /// for your dataset. You can set it to `0`, but this might cause problems. You can also reduce this temporarily
+    /// to do quick insertions before restoring it to a higher value, but if you leave it low, it will make insertions
+    /// slower overall.
     pub fn freshens(self, freshens: usize) -> Self {
         Self { freshens, ..self }
     }
@@ -99,6 +101,8 @@ impl<K, V, D> Hrc<K, V, D> {
     /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
     /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
     /// distance functions. If your distance function is expensive, benchmark HRC with this parameter set to `true`.
+    /// With this variable, there is no tradeoff. For some distance functions/key types this will be objectively better,
+    /// and for some it will be objectively worse. You will see that in the recall curve.
     pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
         Self {
             exclude_all_searched,
