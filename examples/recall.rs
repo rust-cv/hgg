@@ -97,7 +97,7 @@ fn main() {
         let start_time = Instant::now();
         for &key in new_search_items {
             // Insert the key.
-            hrc.insert(0, key, ());
+            hrc.insert(key, ());
         }
 
         let end_time = Instant::now();

@@ -7,7 +7,7 @@ mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{cmp, fmt::Debug, marker::PhantomData};
+use core::{cmp, fmt::Debug, iter, marker::PhantomData};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HrcEdge, HrcHeader};
@@ -238,6 +238,37 @@ where
             .map(|(node, distance, _)| (node.node, distance))
     }
 
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This implementation performs kNN search on every layer. It also returns a vector
+    /// with the final nearest neighbors on every layer it searched.
+    ///
+    /// Returns a vector over the layers, with each layer having several `(node, distance)`.
+    pub fn search_knn_wide_path(&self, query: &K, num: usize) -> Vec<Vec<(usize, D)>> {
+        if self.is_empty() {
+            return vec![];
+        }
+        let num_layers = self.layers();
+        let mut layers: Vec<Vec<(usize, D)>> = iter::repeat(vec![])
+            .take(num_layers - 1)
+            .chain(Some(vec![(
+                self.root,
+                self.nodes[self.root].key.distance(query).as_(),
+            )]))
+            .collect();
+        // This assumes that the top layer only contains one node (as it should).
+        for layer in (0..num_layers - 1).rev() {
+            let (node, distance) = layers[layer + 1][0];
+            let node = self.layer_node_weak(layer, node);
+            layers[layer] = self
+                .search_layer_knn_from_weak(node, distance, query, num)
+                .into_iter()
+                .map(|(node, distance, _)| (node.node, distance))
+                .collect();
+        }
+        layers
+    }
+
     /// Searches for the nearest neighbor greedily.
     ///
     /// This is faster than calling [`Hrc::search_layer_knn`] with `num` of `1`.
@@ -308,7 +339,7 @@ where
     }
 
     /// Insert a (key, value) pair.
-    pub fn insert(&mut self, layer: usize, key: K, value: V) -> usize {
+    pub fn insert(&mut self, key: K, value: V) -> usize {
         // Add the node (it will be added this way regardless).
         let node = self.nodes.len();
         // Create the node.
@@ -341,20 +372,20 @@ where
 
         // Find nearest neighbor via greedy search.
         let mut knn: Vec<_> = self
-            .search_layer_knn_from(layer, 0, &key, self.optimal_k())
+            .search_layer_knn_from(0, 0, &key, self.optimal_k())
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
 
         // Add edge to nearest neighbor.
-        self.layer_add_edge(layer, knn[0].0, node);
+        self.layer_add_edge(0, knn[0].0, node);
 
         // The initial neighbors only includes the edge we just added.
         let mut neighbors = Vec::with_capacity(self.optimal_k());
         neighbors.push(knn[0].1.clone());
 
         // Optimize its edges using stalest nodes.
-        let mut node_weak = self.layer_node_weak(layer, node);
-        self.optimize_layer_neighborhood(layer, &mut node_weak, &mut knn, &mut neighbors);
+        let mut node_weak = self.layer_node_weak(0, node);
+        self.optimize_layer_neighborhood(0, &mut node_weak, &mut knn, &mut neighbors);
 
         // Freshen the graph to clean up older nodes.
         self.freshen();

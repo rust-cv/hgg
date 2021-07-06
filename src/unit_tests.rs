@@ -27,7 +27,7 @@ fn random_insertion_stats() {
             eprintln!("Inserting {}", ix);
             // eprintln!("Stats: {:?}", hrc.stats());
         }
-        hrc.insert(0, key, ());
+        hrc.insert(key, ());
     }
 
     eprintln!("Histogram: {:?}", hrc.histogram());
