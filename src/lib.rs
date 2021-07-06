@@ -200,9 +200,31 @@ where
         (self.edges + 1).saturating_mul(3) / self.len()
     }
 
-    /// Searches for the nearest neighbor greedily.
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn search(&self, query: &K) -> Option<(usize, D)> {
+        if self.is_empty() {
+            None
+        } else {
+            let mut node = self.layer_node_weak(self.layers() - 1, self.root);
+            let mut distance = node.key.distance(query).as_();
+            // This assumes that the top layer only contains one node (as it should).
+            for layer in (0..self.layers() - 1).rev() {
+                node = self.layer_node_weak(layer, node.node);
+                let (new_node, new_distance) = self.search_layer_from_weak(node, distance, query);
+                node = new_node;
+                distance = new_distance;
+            }
+            Some((node.node, distance))
+        }
+    }
+
+    /// Searches for the nearest neighbor greedily.
+    ///
+    /// This is faster than calling [`Hrc::search_layer_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
     pub fn search_layer(&self, layer: usize, query: &K) -> Option<(usize, D)> {
