@@ -381,6 +381,8 @@ where
         }
 
         // Find nearest neighbor via greedy search.
+        // TODO: Change this to use a non-wide version that preserves path, then re-find neighbors if needed.
+        // Must also give knn results on bottom layer, like regular search_knn does.
         let knn_layers = self.search_knn_wide_path(&key, self.optimal_k());
 
         for (layer, knn_weak) in knn_layers.into_iter().enumerate() {
