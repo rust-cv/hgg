@@ -180,6 +180,8 @@ where
 {
     /// This gets the "optimal" k for inserting.
     ///
+    /// This could be used if you want to have a very high recall consistently when searching.
+    ///
     /// This can be used to see what HRC is using internally for its `k` value during kNN searches.
     /// This value is not necessarily optimal for searches by the user, and is specifically set to
     /// prevent an explosion of graph connectivity and prevent a collapse of graph connectivity.
