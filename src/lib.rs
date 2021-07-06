@@ -206,20 +206,36 @@ where
     ///
     /// Returns `(node, distance)`.
     pub fn search(&self, query: &K) -> Option<(usize, D)> {
-        if self.is_empty() {
-            None
+        self.search_weak(query)
+            .map(|(node, distance)| (node.node, distance))
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This implementation starts with 1nn search until the bottom layer and then
+    /// performs kNN search.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn search_knn(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, D)> + '_ {
+        let mapfn = |(weak, distance, _): (HVec<K>, D, bool)| (weak.node, distance);
+        if let Some((node, distance)) = self.search_weak(query) {
+            self.search_layer_knn_from_weak(node, distance, query, num)
+                .into_iter()
+                .map(mapfn)
         } else {
-            let mut node = self.layer_node_weak(self.layers() - 1, self.root);
-            let mut distance = node.key.distance(query).as_();
-            // This assumes that the top layer only contains one node (as it should).
-            for layer in (0..self.layers() - 1).rev() {
-                node = self.layer_node_weak(layer, node.node);
-                let (new_node, new_distance) = self.search_layer_from_weak(node, distance, query);
-                node = new_node;
-                distance = new_distance;
-            }
-            Some((node.node, distance))
+            vec![].into_iter().map(mapfn)
         }
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This implementation performs kNN search on every layer.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn search_knn_wide(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, D)> + '_ {
+        self.search_knn_wide_weak(query, num)
+            .into_iter()
+            .map(|(node, distance, _)| (node.node, distance))
     }
 
     /// Searches for the nearest neighbor greedily.
@@ -391,6 +407,52 @@ where
                 self.optimize_layer_node(layer, node);
             }
         }
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    ///
+    /// Returns `(node, distance)`.
+    fn search_weak(&self, query: &K) -> Option<(HVec<K>, D)> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut node = self.layer_node_weak(self.layers() - 1, self.root);
+        let mut distance = node.key.distance(query).as_();
+        // This assumes that the top layer only contains one node (as it should).
+        for layer in (0..self.layers() - 1).rev() {
+            node = self.layer_node_weak(layer, node.node);
+            let (new_node, new_distance) = self.search_layer_from_weak(node, distance, query);
+            node = new_node;
+            distance = new_distance;
+        }
+        Some((node, distance))
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This implementation performs kNN search on every layer.
+    ///
+    /// Returns `(node, distance)`.
+    fn search_knn_wide_weak(&self, query: &K, num: usize) -> Vec<(HVec<K>, D, bool)> {
+        if self.is_empty() {
+            return vec![];
+        }
+        let mut node = self.layer_node_weak(self.layers() - 1, self.root);
+        let mut distance = node.key.distance(query).as_();
+        // This assumes that the top layer only contains one node (as it should).
+        for layer in (0..self.layers() - 1).rev() {
+            node = self.layer_node_weak(layer, node.node);
+            let knn = self.search_layer_knn_from_weak(node, distance, query, num);
+            if layer == 0 {
+                return knn;
+            }
+            let (new_node, new_distance, _) = knn.into_iter().next().unwrap();
+            node = new_node;
+            distance = new_distance;
+        }
+        vec![(node, distance, true)]
     }
 
     fn layer_node_weak(&self, layer: usize, node: usize) -> HVec<K> {
