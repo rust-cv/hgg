@@ -7,7 +7,7 @@ mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{cmp, fmt::Debug, iter, marker::PhantomData};
+use core::{fmt::Debug, iter, marker::PhantomData};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HrcEdge, HrcHeader};
@@ -51,10 +51,10 @@ pub struct Hrc<K, V, D = u64> {
     root: usize,
     /// The node which has been cleaned up/inserted most recently.
     freshest: usize,
-    /// The number of edges in the graph.
-    edges: usize,
-    /// The highest number of edges of any node.
-    most_edges: usize,
+    /// The number of edges in the graph on each layer.
+    edges: Vec<usize>,
+    /// The number of nodes in the graph on each layer.
+    node_counts: Vec<usize>,
     /// Number of freshens per insert.
     freshens: usize,
     /// Whether to exclude all keys for which the distance has been calculated in kNN search.
@@ -70,8 +70,8 @@ impl<K, V, D> Hrc<K, V, D> {
             nodes: vec![],
             root: 0,
             freshest: 0,
-            edges: 0,
-            most_edges: 0,
+            edges: vec![],
+            node_counts: vec![],
             freshens: 2,
             exclude_all_searched: false,
             _phantom: PhantomData,
@@ -131,9 +131,9 @@ impl<K, V, D> Hrc<K, V, D> {
         self.nodes.len()
     }
 
-    /// Returns the number of edges in the graph.
-    pub fn edges(&self) -> usize {
-        self.edges
+    /// Returns the number of edges in the graph on each layer.
+    pub fn edges(&self) -> Vec<usize> {
+        self.edges.clone()
     }
 
     /// Returns the number of layers in the graph.
@@ -206,8 +206,8 @@ where
     /// prevent an explosion of graph connectivity and prevent a collapse of graph connectivity.
     /// The user should use a `k` value that corresponds to the recall they desire for the number
     /// of actual neighbors they want.
-    pub fn optimal_k(&self) -> usize {
-        (self.edges + 1).saturating_mul(3) / self.len()
+    pub fn optimal_k(&self, layer: usize) -> usize {
+        (self.edges[layer] + 1).saturating_mul(3) / self.node_counts[layer]
     }
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
@@ -218,6 +218,29 @@ where
     pub fn search(&self, query: &K) -> Option<(usize, D)> {
         self.search_weak(query)
             .map(|(node, distance)| (node.node, distance))
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    ///
+    /// Returns the greedy search result on every layer as `(node, distance)`.
+    fn search_path(&self, query: &K) -> Vec<(HVec<K>, D)> {
+        if self.is_empty() {
+            return vec![];
+        }
+        let init_node = self.layer_node_weak(self.layers() - 1, self.root);
+        let init_distance = init_node.key.distance(query).as_();
+        let mut path: Vec<(HVec<K>, D)> = iter::repeat_with(|| (init_node.weak(), init_distance))
+            .take(self.layers())
+            .collect();
+        // This assumes that the top layer only contains one node (as it should).
+        for layer in (0..self.layers() - 1).rev() {
+            let node = self.layer_node_weak(layer, path[layer + 1].0.node);
+            let distance = path[layer + 1].1;
+            path[layer] = self.search_layer_from_weak(node, distance, query);
+        }
+        path
     }
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
@@ -246,35 +269,6 @@ where
         self.search_knn_wide_weak(query, num)
             .into_iter()
             .map(|(node, distance, _)| (node.node, distance))
-    }
-
-    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
-    ///
-    /// This implementation performs kNN search on every layer. It also returns a vector
-    /// with the final nearest neighbors on every layer it searched.
-    ///
-    /// Returns a vector over the layers, with each layer having several `(node, distance)`.
-    fn search_knn_wide_path(&self, query: &K, num: usize) -> Vec<Vec<(HVec<K>, D, bool)>> {
-        if self.is_empty() {
-            return vec![];
-        }
-        let num_layers = self.layers();
-        let mut layers: Vec<Vec<(HVec<K>, D, bool)>> = iter::repeat_with(Vec::new)
-            .take(num_layers - 1)
-            .chain(Some(vec![(
-                self.layer_node_weak(num_layers - 1, self.root),
-                self.nodes[self.root].key.distance(query).as_(),
-                true,
-            )]))
-            .collect();
-        // This assumes that the top layer only contains one node (as it should).
-        for layer in (0..num_layers - 1).rev() {
-            let node = layers[layer + 1][0].0.weak();
-            let distance = layers[layer + 1][0].1;
-            let node = self.layer_node_weak(layer, node.node);
-            layers[layer] = self.search_layer_knn_from_weak(node, distance, query, num);
-        }
-        layers
     }
 
     /// Searches for the nearest neighbor greedily.
@@ -375,6 +369,8 @@ where
             self.nodes[node]
                 .layers
                 .push(HeaderVec::new(HrcHeader { key, node }));
+            self.edges.push(0);
+            self.node_counts.push(1);
             // Set the root.
             self.root = 0;
             return 0;
@@ -383,18 +379,20 @@ where
         // Find nearest neighbor via greedy search.
         // TODO: Change this to use a non-wide version that preserves path, then re-find neighbors if needed.
         // Must also give knn results on bottom layer, like regular search_knn does.
-        let knn_layers = self.search_knn_wide_path(&key, self.optimal_k());
+        let path = self.search_path(&key);
 
-        for (layer, knn_weak) in knn_layers.into_iter().enumerate() {
+        for (layer, (found, distance)) in path.into_iter().enumerate() {
             // Add the new layer to this node.
             self.nodes[node].layers.push(HeaderVec::new(HrcHeader {
                 key: key.clone(),
                 node,
             }));
+            self.node_counts[layer] += 1;
 
-            // Get the kNN as (node, key) pairs.
-            let mut knn: Vec<(usize, K)> = knn_weak
-                .iter()
+            // Do a knn search on this layer, starting at the found node.
+            let mut knn: Vec<(usize, K)> = self
+                .search_layer_knn_from_weak(found, distance, &key, self.optimal_k(layer))
+                .into_iter()
                 .map(|(node, _, _)| (node.node, node.key.clone()))
                 .collect();
 
@@ -411,10 +409,12 @@ where
                     key: key.clone(),
                     node,
                 }));
+                self.edges.push(0);
+                self.node_counts.push(1);
             }
 
             // The initial neighbors only includes the edge we just added.
-            let mut neighbors = Vec::with_capacity(self.optimal_k());
+            let mut neighbors = Vec::with_capacity(self.optimal_k(layer));
             neighbors.push(knn[0].1.clone());
 
             // Optimize its edges using stalest nodes.
@@ -459,13 +459,13 @@ where
     /// Trims everything from a node that is no longer needed, and then only adds back what is needed.
     pub fn optimize_layer_node(&mut self, layer: usize, node: usize) {
         let mut knn: Vec<_> = self
-            .search_layer_knn_of(layer, node, self.optimal_k())
+            .search_layer_knn_of(layer, node, self.optimal_k(layer))
             .skip(1)
             .map(|(nn, _)| (nn, self.nodes[nn].key.clone()))
             .collect();
         self.layer_reinsert(layer, node);
         let mut node = self.layer_node_weak(layer, node);
-        let mut neighbors = Vec::with_capacity(self.optimal_k());
+        let mut neighbors = Vec::with_capacity(self.optimal_k(layer));
         neighbors.extend(
             node.as_slice()
                 .iter()
@@ -588,8 +588,7 @@ where
             self.update_weak(b.weak(), previous, true);
         }
 
-        self.edges += 1;
-        self.most_edges = cmp::max(self.most_edges, cmp::max(a.len(), b.len()));
+        self.edges[layer] += 1;
     }
 
     fn layer_add_edge(&mut self, layer: usize, a: usize, b: usize) {
@@ -812,7 +811,7 @@ where
         let node_key = node.key.clone();
 
         // Disconnect the node.
-        let mut neighbors = self.disconnect(&mut node);
+        let mut neighbors = self.disconnect(layer, &mut node);
 
         // Sort the neighbors to minimize the number we insert.
         neighbors.sort_unstable_by_key(|&(_, distance)| distance);
@@ -836,11 +835,11 @@ where
     /// and break the weak pointers.
     ///
     /// Returns (node, distance) pairs.
-    fn disconnect(&mut self, node: &mut HVec<K>) -> Vec<(usize, D)> {
+    fn disconnect(&mut self, layer: usize, node: &mut HVec<K>) -> Vec<(usize, D)> {
         let node_key = node.key.clone();
         let mut neighbors = vec![];
         let ptr = node.ptr();
-        self.edges -= node.len();
+        self.edges[layer] -= node.len();
         for (mut neighbor, distance) in node.neighbors_distance(&node_key) {
             neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
             neighbors.push((neighbor.node, distance));

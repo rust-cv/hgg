@@ -107,8 +107,12 @@ fn main() {
             new_search_items.len() as f64 / (end_time - start_time).as_secs_f64()
         );
 
-        let average_neighbors = hrc.edges() as f64 * 2.0 / hrc.len() as f64;
-        eprintln!("Average neighbors: {}", average_neighbors);
+        let average_neighbors: Vec<_> = hrc
+            .edges()
+            .iter()
+            .map(|&edges| edges as f64 * 2.0 / hrc.len() as f64)
+            .collect();
+        eprintln!("Average neighbors: {:?}", average_neighbors);
         eprintln!("Histogram layer nodes: {:?}", hrc.histogram_layer_nodes());
         eprintln!("Histogram neighbors: {:?}", hrc.histogram_neighbors());
 
