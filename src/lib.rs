@@ -10,21 +10,21 @@ use alloc::{vec, vec::Vec};
 use core::{fmt::Debug, iter};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
-use hvec::{HVec, HrcEdge, HrcHeader};
+use hvec::{HVec, HggEdge, HggHeader};
 use num_traits::Zero;
 use space::MetricPoint;
 
 #[derive(Debug)]
-struct HrcNode<K, V> {
+struct HggNode<K, V> {
     key: K,
     value: V,
     /// Contains the edges of each layer of the graph on which this exists.
-    layers: Vec<HeaderVec<HrcHeader<K>, HrcEdge<K>>>,
+    layers: Vec<HeaderVec<HggHeader<K>, HggEdge<K>>>,
     /// Forms a linked list through the nodes that creates the freshening order.
     next: usize,
 }
 
-impl<K, V> HrcNode<K, V> {
+impl<K, V> HggNode<K, V> {
     fn layers(&self) -> usize {
         self.layers.len()
     }
@@ -32,11 +32,11 @@ impl<K, V> HrcNode<K, V> {
 
 /// Collection for retrieving entries based on key proximity in a metric space.
 #[derive(Debug)]
-pub struct Hrc<K, V> {
+pub struct Hgg<K, V> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
-    nodes: Vec<HrcNode<K, V>>,
+    nodes: Vec<HggNode<K, V>>,
     /// This node exists on the top layer, and is the root of all searches.
     root: usize,
     /// The node which has been cleaned up/inserted most recently.
@@ -53,8 +53,8 @@ pub struct Hrc<K, V> {
     insert_knn: usize,
 }
 
-impl<K, V> Hrc<K, V> {
-    /// Creates a new [`Hrc`]. It will be empty and begin with default settings.
+impl<K, V> Hgg<K, V> {
+    /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
             nodes: vec![],
@@ -90,7 +90,7 @@ impl<K, V> Hrc<K, V> {
     ///
     /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
     /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
-    /// distance functions. If your distance function is expensive, benchmark HRC with this parameter set to `true`.
+    /// distance functions. If your distance function is expensive, benchmark Hgg with this parameter set to `true`.
     /// With this variable, there is no tradeoff. For some distance functions/key types this will be objectively better,
     /// and for some it will be objectively worse. You will see that in the recall curve.
     pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
@@ -192,7 +192,7 @@ impl<K, V> Hrc<K, V> {
                     layer_node
                         .as_slice()
                         .iter()
-                        .map(|HrcEdge { neighbor, .. }| neighbor.node)
+                        .map(|HggEdge { neighbor, .. }| neighbor.node)
                         .collect::<Vec<_>>(),
                 );
             }
@@ -201,13 +201,13 @@ impl<K, V> Hrc<K, V> {
     }
 }
 
-impl<K, V> Hrc<K, V>
+impl<K, V> Hgg<K, V>
 where
     K: MetricPoint + Clone,
 {
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
-    /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
     pub fn search(&self, query: &K) -> Option<(usize, K::Metric)> {
@@ -217,7 +217,7 @@ where
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
-    /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns the greedy search result on every layer as `(node, distance)`.
     fn search_path(&self, query: &K) -> Vec<(HVec<K>, K::Metric)> {
@@ -277,7 +277,7 @@ where
 
     /// Searches for the nearest neighbor greedily.
     ///
-    /// This is faster than calling [`Hrc::search_layer_knn`] with `num` of `1`.
+    /// This is faster than calling [`Hgg::search_layer_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
     pub fn search_layer(&self, layer: usize, query: &K) -> Option<(usize, K::Metric)> {
@@ -352,7 +352,7 @@ where
         // The current freshest node's `next` is the stalest node, which will subsequently become
         // the freshest when freshened. If this is the only node, looking up the freshest node will fail.
         // Due to that, we set this node's next to itself if its the only node.
-        self.nodes.push(HrcNode {
+        self.nodes.push(HggNode {
             key: key.clone(),
             value,
             layers: vec![],
@@ -372,7 +372,7 @@ where
             // Push the new layer 0.
             self.nodes[node]
                 .layers
-                .push(HeaderVec::new(HrcHeader { key, node }));
+                .push(HeaderVec::new(HggHeader { key, node }));
             self.edges.push(0);
             self.node_counts.push(1);
             // Set the root.
@@ -385,7 +385,7 @@ where
 
         for (layer, (found, distance)) in path.into_iter().enumerate() {
             // Add the new layer to this node.
-            self.nodes[node].layers.push(HeaderVec::new(HrcHeader {
+            self.nodes[node].layers.push(HeaderVec::new(HggHeader {
                 key: key.clone(),
                 node,
             }));
@@ -407,7 +407,7 @@ where
                 // Set the root to this node.
                 self.root = node;
                 // Create the new layer (totally empty).
-                self.nodes[node].layers.push(HeaderVec::new(HrcHeader {
+                self.nodes[node].layers.push(HeaderVec::new(HggHeader {
                     key: key.clone(),
                     node,
                 }));
@@ -428,7 +428,7 @@ where
                 .layer_node_weak(layer, node)
                 .as_slice()
                 .iter()
-                .any(|HrcEdge { neighbor, .. }| self.nodes[neighbor.node].layers() > layer + 1)
+                .any(|HggEdge { neighbor, .. }| self.nodes[neighbor.node].layers() > layer + 1)
             {
                 // If any of the neighbors are on the next layer up, we don't need to add this node to more layers.
                 break;
@@ -471,7 +471,7 @@ where
         neighbors.extend(
             node.as_slice()
                 .iter()
-                .map(|HrcEdge { key, .. }| key.clone()),
+                .map(|HggEdge { key, .. }| key.clone()),
         );
         self.optimize_layer_neighborhood(layer, &mut node, &mut knn, &mut neighbors);
     }
@@ -491,7 +491,7 @@ where
 
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
-    /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
+    /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
     fn search_weak(&self, query: &K) -> Option<(HVec<K>, K::Metric)> {
@@ -543,7 +543,7 @@ where
     fn update_weak(&mut self, mut node: HVec<K>, previous: *const (), add_last: bool) {
         let old_len = if add_last { node.len() } else { node.len() - 1 };
         let weak = node.weak();
-        for HrcEdge { neighbor, .. } in &mut node[..old_len] {
+        for HggEdge { neighbor, .. } in &mut node[..old_len] {
             if let Some(edge) = neighbor
                 .as_mut_slice()
                 .iter_mut()
@@ -561,7 +561,7 @@ where
         let b_key = b.key.clone();
 
         // Add the edge from a to b.
-        let edge = HrcEdge {
+        let edge = HggEdge {
             key: b_key,
             neighbor: b.weak(),
         };
@@ -576,7 +576,7 @@ where
         }
 
         // Add the edge from b to a.
-        let edge = HrcEdge {
+        let edge = HggEdge {
             key: a_key,
             neighbor: a.weak(),
         };
@@ -674,7 +674,7 @@ where
                 *searched = true;
                 // Erase the reference to the search node (to avoid lifetime & borrowing issues).
                 let previous_node = previous_node.weak();
-                for HrcEdge { key, neighbor } in previous_node.as_slice() {
+                for HggEdge { key, neighbor } in previous_node.as_slice() {
                     // TODO: Try this as a BTreeSet.
                     // Make sure that we don't have a copy of this node already or we will get duplicates.
                     if exclude.contains(neighbor) {
@@ -811,7 +811,7 @@ where
 
     /// Removes a node from the graph and then reinserts it with the minimum number of edges on a particular layer.
     ///
-    /// It is recommended to use [`Hrc::freshen`] instead of this method.
+    /// It is recommended to use [`Hgg::freshen`] instead of this method.
     fn layer_reinsert(&mut self, layer: usize, node: usize) {
         // This wont work if we only have 1 node.
         if self.len() == 1 {
@@ -852,7 +852,7 @@ where
         let ptr = node.ptr();
         self.edges[layer] -= node.len();
         for (mut neighbor, distance) in node.neighbors_distance(&node_key) {
-            neighbor.retain(|HrcEdge { neighbor, .. }| !neighbor.is(ptr));
+            neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
             neighbors.push((neighbor.node, distance));
         }
         node.retain(|_| false);
@@ -860,7 +860,7 @@ where
     }
 }
 
-impl<K, V> Default for Hrc<K, V> {
+impl<K, V> Default for Hgg<K, V> {
     fn default() -> Self {
         Self::new()
     }

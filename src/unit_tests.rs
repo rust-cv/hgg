@@ -1,6 +1,6 @@
 extern crate std;
 
-use crate::Hrc;
+use crate::Hgg;
 use alloc::vec::Vec;
 use rand::{Rng, SeedableRng};
 use space::Bits256;
@@ -8,7 +8,7 @@ use std::eprintln;
 
 #[test]
 fn random_insertion_stats() {
-    let mut hrc: Hrc<Bits256, ()> = Hrc::new();
+    let mut hgg: Hgg<Bits256, ()> = Hgg::new();
 
     // Use a PRNG with good statistical properties for generating 64-bit numbers.
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
@@ -20,23 +20,22 @@ fn random_insertion_stats() {
         .take(1 << 12)
         .collect();
 
-    // Insert keys into HRC.
+    // Insert keys into HGG.
     for (ix, &key) in keys.iter().enumerate() {
         if ix % 1000 == 0 {
             eprintln!("Inserting {}", ix);
-            // eprintln!("Stats: {:?}", hrc.stats());
         }
-        hrc.insert(key, ());
+        hgg.insert(key, ());
     }
 
-    eprintln!("Histogram: {:?}", hrc.histogram_neighbors());
+    eprintln!("Histogram: {:?}", hgg.histogram_neighbors());
 
     for (ix, key) in keys.iter().enumerate() {
         if ix % 100 == 0 {
             eprintln!("Searching {}", ix);
         }
         // Search each key.
-        let (_, distance) = hrc.search_layer_knn(0, key, 5).next().unwrap();
+        let (_, distance) = hgg.search_layer_knn(0, key, 5).next().unwrap();
         // Make sure that the best result is this key.
         assert_eq!(distance, 0);
     }

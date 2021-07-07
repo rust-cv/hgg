@@ -8,19 +8,19 @@ use header_vec::HeaderVecWeak;
 use space::MetricPoint;
 
 #[derive(Debug)]
-pub(crate) struct HrcEdge<K> {
+pub(crate) struct HggEdge<K> {
     pub(crate) key: K,
     pub(crate) neighbor: HVec<K>,
 }
 
 #[derive(Debug)]
-pub(crate) struct HrcHeader<K> {
+pub(crate) struct HggHeader<K> {
     pub(crate) key: K,
     pub(crate) node: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct HVec<K>(pub(crate) HeaderVecWeak<HrcHeader<K>, HrcEdge<K>>);
+pub(crate) struct HVec<K>(pub(crate) HeaderVecWeak<HggHeader<K>, HggEdge<K>>);
 
 impl<K> HVec<K> {
     pub fn weak(&self) -> Self {
@@ -44,12 +44,12 @@ where
     ) -> impl Iterator<Item = (Self, K::Metric)> + 'a {
         self.as_slice()
             .iter()
-            .map(move |HrcEdge { key, neighbor }| (neighbor.weak(), query.distance(key)))
+            .map(move |HggEdge { key, neighbor }| (neighbor.weak(), query.distance(key)))
     }
 }
 
 impl<K> Deref for HVec<K> {
-    type Target = HeaderVecWeak<HrcHeader<K>, HrcEdge<K>>;
+    type Target = HeaderVecWeak<HggHeader<K>, HggEdge<K>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

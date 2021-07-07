@@ -5,7 +5,7 @@ authors = ["Geordon Worley <vadixidav@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-hrc = { path = ".." }
+hgg = { path = ".." }
 
 [profile.dev]
 panic = "abort"

@@ -1,6 +1,6 @@
 extern crate std;
 
-use hrc::Hrc;
+use hgg::Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
 use space::{Bits512, MetricPoint};
@@ -80,7 +80,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-    let mut hrc: Hrc<Bits512, ()> = Hrc::new();
+    let mut hgg = Hgg::new();
     let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
@@ -93,12 +93,12 @@ fn main() {
             // In all other cases, take the range from the previous to the current pow.
             &search[1 << (pow - 1)..1 << pow]
         };
-        // Insert keys into HRC.
-        eprintln!("Inserting keys into HRC size {}", 1 << pow);
+        // Insert keys into HGG.
+        eprintln!("Inserting keys into HGG size {}", 1 << pow);
         let start_time = Instant::now();
         for &key in new_search_items {
             // Insert the key.
-            hrc.insert(key, ());
+            hgg.insert(key, ());
         }
 
         let end_time = Instant::now();
@@ -107,9 +107,9 @@ fn main() {
             new_search_items.len() as f64 / (end_time - start_time).as_secs_f64()
         );
 
-        eprintln!("Average neighbors: {:?}", hrc.average_neighbors());
-        eprintln!("Histogram layer nodes: {:?}", hrc.histogram_layer_nodes());
-        eprintln!("Histogram neighbors: {:?}", hrc.histogram_neighbors());
+        eprintln!("Average neighbors: {:?}", hgg.average_neighbors());
+        eprintln!("Histogram layer nodes: {:?}", hgg.histogram_layer_nodes());
+        eprintln!("Histogram neighbors: {:?}", hgg.histogram_neighbors());
 
         eprintln!("Computing correct nearest neighbors for recall calculation");
         let correct_nn_distances: Vec<_> = test
@@ -133,11 +133,11 @@ fn main() {
                     knn
                 );
                 let start_time = Instant::now();
-                let hrc_nn_distances: Vec<_> = match strategy {
+                let hgg_nn_distances: Vec<_> = match strategy {
                     "zero" => test
                         .iter()
                         .map(|query| {
-                            hrc.search_layer_knn_from(0, 0, query, knn)
+                            hgg.search_layer_knn_from(0, 0, query, knn)
                                 .next()
                                 .unwrap()
                                 .1
@@ -145,11 +145,11 @@ fn main() {
                         .collect(),
                     "regular" => test
                         .iter()
-                        .map(|query| hrc.search_knn(query, knn).next().unwrap().1)
+                        .map(|query| hgg.search_knn(query, knn).next().unwrap().1)
                         .collect(),
                     "wide" => test
                         .iter()
-                        .map(|query| hrc.search_knn_wide(query, knn).next().unwrap().1)
+                        .map(|query| hgg.search_knn_wide(query, knn).next().unwrap().1)
                         .collect(),
                     _ => panic!("unexpected stratgy {}", strategy),
                 };
@@ -157,8 +157,8 @@ fn main() {
                 let num_correct = correct_nn_distances
                     .iter()
                     .copied()
-                    .zip(hrc_nn_distances)
-                    .filter(|&(correct_distance, hrc_distance)| correct_distance == hrc_distance)
+                    .zip(hgg_nn_distances)
+                    .filter(|&(correct_distance, hgg_distance)| correct_distance == hgg_distance)
                     .count();
                 let recall = num_correct as f64 / test.len() as f64;
                 let seconds_per_query = (end_time - start_time)
