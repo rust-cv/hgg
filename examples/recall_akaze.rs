@@ -3,7 +3,7 @@ extern crate std;
 use hrc::Hrc;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::{Bits512, Hamming, MetricPoint};
+use space::{Bits512, MetricPoint};
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.
@@ -25,8 +25,8 @@ struct Record {
 }
 
 struct Dataset {
-    search: Vec<Hamming<Bits512>>,
-    test: Vec<Hamming<Bits512>>,
+    search: Vec<Bits512>,
+    test: Vec<Bits512>,
 }
 
 fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
@@ -49,14 +49,14 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     eprintln!("Finished reading descriptors from file. Converting to keys.");
 
     // Convert the data into descriptors.
-    let mut all: Vec<Hamming<Bits512>> = v
+    let mut all: Vec<Bits512> = v
         .chunks_exact(descriptor_size_bytes)
         .map(|b| {
             let mut arr = [0; 64];
             for (d, &s) in arr.iter_mut().zip(b) {
                 *d = s;
             }
-            Hamming(Bits512(arr))
+            Bits512(arr)
         })
         .collect();
     drop(v);
@@ -80,7 +80,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-    let mut hrc: Hrc<Hamming<Bits512>, (), u32> = Hrc::new();
+    let mut hrc: Hrc<Bits512, ()> = Hrc::new();
     let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
@@ -112,12 +112,12 @@ fn main() {
         eprintln!("Histogram neighbors: {:?}", hrc.histogram_neighbors());
 
         eprintln!("Computing correct nearest neighbors for recall calculation");
-        let correct_nn_distances: Vec<u32> = test
+        let correct_nn_distances: Vec<_> = test
             .iter()
             .map(|query| {
                 search[..1 << pow]
                     .iter()
-                    .map(|key| query.distance(key) as u32)
+                    .map(|key| query.distance(key))
                     .min()
                     .unwrap()
             })
@@ -133,7 +133,7 @@ fn main() {
                     knn
                 );
                 let start_time = Instant::now();
-                let hrc_nn_distances: Vec<u32> = match strategy {
+                let hrc_nn_distances: Vec<_> = match strategy {
                     "zero" => test
                         .iter()
                         .map(|query| {

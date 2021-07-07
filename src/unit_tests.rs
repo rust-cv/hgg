@@ -3,21 +3,20 @@ extern crate std;
 use crate::Hrc;
 use alloc::vec::Vec;
 use rand::{Rng, SeedableRng};
-use space::{Bits256, Hamming};
+use space::Bits256;
 use std::eprintln;
 
 #[test]
 fn random_insertion_stats() {
-    let mut hrc: Hrc<Hamming<Bits256>, ()> = Hrc::new();
+    let mut hrc: Hrc<Bits256, ()> = Hrc::new();
 
     // Use a PRNG with good statistical properties for generating 64-bit numbers.
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
     // Generate random keys.
-    let keys: Vec<Hamming<Bits256>> = (&mut rng)
+    let keys: Vec<Bits256> = (&mut rng)
         .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
         .map(Bits256)
-        .map(Hamming)
         .take(1 << 12)
         .collect();
 

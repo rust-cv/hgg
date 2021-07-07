@@ -7,11 +7,11 @@ mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{fmt::Debug, iter, marker::PhantomData};
+use core::{fmt::Debug, iter};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HrcEdge, HrcHeader};
-use num_traits::AsPrimitive;
+use num_traits::Zero;
 use space::MetricPoint;
 
 #[derive(Debug)]
@@ -31,18 +31,8 @@ impl<K, V> HrcNode<K, V> {
 }
 
 /// Collection for retrieving entries based on key proximity in a metric space.
-///
-/// Optional type parameter `D` can be set to a smaller unsigned integer (`u8`, `u16`, `u32`) ONLY
-/// if you know that the distance metric cannot overflow this unsigned integer. If it does, then
-/// you will have issues. `f32` metric sources can be safely used with `u32`, as only the lower
-/// 32 bits of the `u64` is utilized in that case, but `f64` CANNOT be used with anything smaller than `u64`.
-/// There is no advantage to using `u128` as the distance metric is produced as `u64`.
-/// This parameter DOES affect the performance in benchmarks, though the amount may vary between machines.
-/// Smaller integer types will yield better performance, but the difference will likely be less than 25%.
-/// On one machine, u64 -> u32 yielded 10-20% performance, but u32 -> u16 yielded less than 1%.
-/// This will also have a much more negligable effect for key types with an expensive distance function.
 #[derive(Debug)]
-pub struct Hrc<K, V, D = u64> {
+pub struct Hrc<K, V> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
@@ -61,11 +51,9 @@ pub struct Hrc<K, V, D = u64> {
     exclude_all_searched: bool,
     /// Determines the number of nearest neighbors used for inserting.
     insert_knn: usize,
-    /// This allows a consistent number to be used for distance storage during usage.
-    _phantom: PhantomData<D>,
 }
 
-impl<K, V, D> Hrc<K, V, D> {
+impl<K, V> Hrc<K, V> {
     /// Creates a new [`Hrc`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
@@ -77,7 +65,6 @@ impl<K, V, D> Hrc<K, V, D> {
             freshens: 1,
             exclude_all_searched: false,
             insert_knn: 100,
-            _phantom: PhantomData,
         }
     }
 
@@ -214,18 +201,16 @@ impl<K, V, D> Hrc<K, V, D> {
     }
 }
 
-impl<K, V, D> Hrc<K, V, D>
+impl<K, V> Hrc<K, V>
 where
     K: MetricPoint + Clone,
-    D: Copy + Ord + 'static,
-    u64: AsPrimitive<D>,
 {
     /// Searches for the nearest neighbor greedily from the top layer to the bottom.
     ///
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    pub fn search(&self, query: &K) -> Option<(usize, D)> {
+    pub fn search(&self, query: &K) -> Option<(usize, K::Metric)> {
         self.search_weak(query)
             .map(|(node, distance)| (node.node, distance))
     }
@@ -235,15 +220,16 @@ where
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
     ///
     /// Returns the greedy search result on every layer as `(node, distance)`.
-    fn search_path(&self, query: &K) -> Vec<(HVec<K>, D)> {
+    fn search_path(&self, query: &K) -> Vec<(HVec<K>, K::Metric)> {
         if self.is_empty() {
             return vec![];
         }
         let init_node = self.layer_node_weak(self.layers() - 1, self.root);
-        let init_distance = init_node.key.distance(query).as_();
-        let mut path: Vec<(HVec<K>, D)> = iter::repeat_with(|| (init_node.weak(), init_distance))
-            .take(self.layers())
-            .collect();
+        let init_distance = init_node.key.distance(query);
+        let mut path: Vec<(HVec<K>, K::Metric)> =
+            iter::repeat_with(|| (init_node.weak(), init_distance))
+                .take(self.layers())
+                .collect();
         // This assumes that the top layer only contains one node (as it should).
         for layer in (0..self.layers() - 1).rev() {
             let node = self.layer_node_weak(layer, path[layer + 1].0.node);
@@ -259,8 +245,12 @@ where
     /// performs kNN search.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_knn(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, D)> + '_ {
-        let mapfn = |(weak, distance, _): (HVec<K>, D, bool)| (weak.node, distance);
+    pub fn search_knn(
+        &self,
+        query: &K,
+        num: usize,
+    ) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
+        let mapfn = |(weak, distance, _): (HVec<K>, K::Metric, bool)| (weak.node, distance);
         if let Some((node, distance)) = self.search_weak(query) {
             self.search_layer_knn_from_weak(node, distance, query, num)
                 .into_iter()
@@ -275,7 +265,11 @@ where
     /// This implementation performs kNN search on every layer.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_knn_wide(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, D)> + '_ {
+    pub fn search_knn_wide(
+        &self,
+        query: &K,
+        num: usize,
+    ) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
         self.search_knn_wide_weak(query, num)
             .into_iter()
             .map(|(node, distance, _)| (node.node, distance))
@@ -286,7 +280,7 @@ where
     /// This is faster than calling [`Hrc::search_layer_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_layer(&self, layer: usize, query: &K) -> Option<(usize, D)> {
+    pub fn search_layer(&self, layer: usize, query: &K) -> Option<(usize, K::Metric)> {
         if self.is_empty() {
             None
         } else {
@@ -302,18 +296,18 @@ where
         layer: usize,
         query: &K,
         num: usize,
-    ) -> impl Iterator<Item = (usize, D)> + '_ {
+    ) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
         self.search_layer_knn_from(layer, 0, query, num)
     }
 
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     ///
     /// Returns `(node, distance)`.
-    pub fn search_layer_from(&self, layer: usize, from: usize, query: &K) -> (usize, D) {
+    pub fn search_layer_from(&self, layer: usize, from: usize, query: &K) -> (usize, K::Metric) {
         // Get the weak node that corresponds to the given node on its particular layer.
         let (weak, distance) = self.search_layer_from_weak(
             self.layer_node_weak(layer, from),
-            query.distance(&self.nodes[from].key).as_(),
+            query.distance(&self.nodes[from].key),
             query,
         );
         // Get the index from the weak node.
@@ -329,10 +323,10 @@ where
         from: usize,
         query: &K,
         num: usize,
-    ) -> impl Iterator<Item = (usize, D)> + '_ {
+    ) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
         self.search_layer_knn_from_weak(
             self.layer_node_weak(layer, from),
-            query.distance(&self.nodes[from].key).as_(),
+            query.distance(&self.nodes[from].key),
             query,
             num,
         )
@@ -346,7 +340,7 @@ where
         layer: usize,
         node: usize,
         num: usize,
-    ) -> impl Iterator<Item = (usize, D)> + '_ {
+    ) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
         self.search_layer_knn_from(layer, node, &self.nodes[node].key, num)
     }
 
@@ -460,8 +454,8 @@ where
     }
 
     /// Computes the distance between two nodes.
-    pub fn distance(&self, a: usize, b: usize) -> D {
-        self.nodes[a].key.distance(&self.nodes[b].key).as_()
+    pub fn distance(&self, a: usize, b: usize) -> K::Metric {
+        self.nodes[a].key.distance(&self.nodes[b].key)
     }
 
     /// Trims everything from a node that is no longer needed, and then only adds back what is needed.
@@ -500,12 +494,12 @@ where
     /// This is faster than calling [`Hrc::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    fn search_weak(&self, query: &K) -> Option<(HVec<K>, D)> {
+    fn search_weak(&self, query: &K) -> Option<(HVec<K>, K::Metric)> {
         if self.is_empty() {
             return None;
         }
         let mut node = self.layer_node_weak(self.layers() - 1, self.root);
-        let mut distance = node.key.distance(query).as_();
+        let mut distance = node.key.distance(query);
         // This assumes that the top layer only contains one node (as it should).
         for layer in (0..self.layers() - 1).rev() {
             node = self.layer_node_weak(layer, node.node);
@@ -521,12 +515,12 @@ where
     /// This implementation performs kNN search on every layer.
     ///
     /// Returns `(node, distance)`.
-    fn search_knn_wide_weak(&self, query: &K, num: usize) -> Vec<(HVec<K>, D, bool)> {
+    fn search_knn_wide_weak(&self, query: &K, num: usize) -> Vec<(HVec<K>, K::Metric, bool)> {
         if self.is_empty() {
             return vec![];
         }
         let mut node = self.layer_node_weak(self.layers() - 1, self.root);
-        let mut distance = node.key.distance(query).as_();
+        let mut distance = node.key.distance(query);
         // This assumes that the top layer only contains one node (as it should).
         for layer in (0..self.layers() - 1).rev() {
             node = self.layer_node_weak(layer, node.node);
@@ -624,7 +618,12 @@ where
     /// Finds the nearest neighbor to the query key starting from the `from` node using greedy search.
     ///
     /// Returns `(node, distance)`.
-    fn search_layer_from_weak(&self, from: HVec<K>, from_distance: D, query: &K) -> (HVec<K>, D) {
+    fn search_layer_from_weak(
+        &self,
+        from: HVec<K>,
+        from_distance: K::Metric,
+        query: &K,
+    ) -> (HVec<K>, K::Metric) {
         let mut best_weak = from;
         let mut best_distance = from_distance;
 
@@ -648,10 +647,10 @@ where
     fn search_layer_knn_from_weak(
         &self,
         from: HVec<K>,
-        from_distance: D,
+        from_distance: K::Metric,
         query: &K,
         num: usize,
-    ) -> Vec<(HVec<K>, D, bool)> {
+    ) -> Vec<(HVec<K>, K::Metric, bool)> {
         if num == 0 {
             return vec![];
         }
@@ -683,7 +682,7 @@ where
                     }
 
                     // Compute the distance from the query.
-                    let distance = query.distance(key).as_();
+                    let distance = query.distance(key);
                     // If we dont have enough yet, add it.
                     if bests.len() < num {
                         bests.insert(
@@ -718,9 +717,13 @@ where
     }
 
     /// Finds the knn of `node` greedily. The first item in the returned vec will always be this node.
-    fn search_layer_knn_of_weak(&self, node: HVec<K>, num: usize) -> Vec<(HVec<K>, D, bool)> {
+    fn search_layer_knn_of_weak(
+        &self,
+        node: HVec<K>,
+        num: usize,
+    ) -> Vec<(HVec<K>, K::Metric, bool)> {
         let key = &node.key;
-        self.search_layer_knn_from_weak(node.weak(), 0.as_(), key, num)
+        self.search_layer_knn_from_weak(node.weak(), Zero::zero(), key, num)
     }
 
     /// Optimizes a node by discovering local minima, and then breaking through all the local minima
@@ -735,9 +738,9 @@ where
         let mut knn_index = 0;
         'knn_next: while let Some((target_node, target_key)) = knn.get(knn_index).cloned() {
             // Get this node's distance.
-            let to_beat = node.key.distance(&target_key).as_();
+            let to_beat = node.key.distance(&target_key);
             // Check if the node is colocated.
-            if to_beat == 0.as_() {
+            if to_beat == Zero::zero() {
                 // In this case, add an edge (with dedup) between them to make sure there is a path.
                 self.layer_add_edge_dedup_weak(
                     layer,
@@ -750,7 +753,7 @@ where
 
             if neighbors
                 .iter()
-                .any(|key| key.distance(&target_key).as_() < to_beat)
+                .any(|key| key.distance(&target_key) < to_beat)
             {
                 // If any are better, then no optimization needed.
                 knn_index += 1;
@@ -762,7 +765,7 @@ where
                 // Go through the nearest neighbors in order from best to worst.
                 for (nn, nn_key) in knn.iter().cloned() {
                     // Compute the distance to the target from the nn.
-                    let nn_distance = nn_key.distance(&target_key).as_();
+                    let nn_distance = nn_key.distance(&target_key);
                     // Add the node as a neighbor (closer or not).
                     // This will update the weak ref if necessary.
                     if self.layer_add_edge_dedup_weak(
@@ -843,7 +846,7 @@ where
     /// and break the weak pointers.
     ///
     /// Returns (node, distance) pairs.
-    fn disconnect(&mut self, layer: usize, node: &mut HVec<K>) -> Vec<(usize, D)> {
+    fn disconnect(&mut self, layer: usize, node: &mut HVec<K>) -> Vec<(usize, K::Metric)> {
         let node_key = node.key.clone();
         let mut neighbors = vec![];
         let ptr = node.ptr();
@@ -857,7 +860,7 @@ where
     }
 }
 
-impl<K, V, D> Default for Hrc<K, V, D> {
+impl<K, V> Default for Hrc<K, V> {
     fn default() -> Self {
         Self::new()
     }

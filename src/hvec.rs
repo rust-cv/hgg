@@ -5,7 +5,6 @@ use core::{
     ops::{Deref, DerefMut},
 };
 use header_vec::HeaderVecWeak;
-use num_traits::AsPrimitive;
 use space::MetricPoint;
 
 #[derive(Debug)]
@@ -39,14 +38,13 @@ impl<K> HVec<K>
 where
     K: MetricPoint,
 {
-    pub fn neighbors_distance<'a, D>(&'a self, query: &'a K) -> impl Iterator<Item = (Self, D)> + 'a
-    where
-        D: Copy + Ord + 'static,
-        u64: AsPrimitive<D>,
-    {
+    pub fn neighbors_distance<'a>(
+        &'a self,
+        query: &'a K,
+    ) -> impl Iterator<Item = (Self, K::Metric)> + 'a {
         self.as_slice()
             .iter()
-            .map(move |HrcEdge { key, neighbor }| (neighbor.weak(), query.distance(key).as_()))
+            .map(move |HrcEdge { key, neighbor }| (neighbor.weak(), query.distance(key)))
     }
 }
 
