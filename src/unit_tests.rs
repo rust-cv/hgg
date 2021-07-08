@@ -8,7 +8,7 @@ use std::eprintln;
 
 #[test]
 fn random_insertion_stats() {
-    let mut hgg: Hgg<Bits256, ()> = Hgg::new();
+    let mut hgg: Hgg<Bits256, ()> = Hgg::new().insert_knn(100);
 
     // Use a PRNG with good statistical properties for generating 64-bit numbers.
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
