@@ -1,8 +1,6 @@
 #![no_std]
 extern crate alloc;
 
-extern crate std;
-
 mod hvec;
 #[cfg(test)]
 mod unit_tests;
