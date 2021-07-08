@@ -99,6 +99,9 @@ impl<K, V> Hgg<K, V> {
     /// usually due to using hamming distance or high dimensionality), then you may want to intentionally
     /// set this lower to avoid consuming too much memory, which can decrease performance if slower
     /// memory (such as swap space) is used.
+    ///
+    /// For all datasets, this value correlates positively with insertion time. If you want insertions to go faster,
+    /// consider decreasing this value.
     pub fn insert_knn(self, insert_knn: usize) -> Self {
         assert!(
             insert_knn > 0,
