@@ -91,8 +91,8 @@ impl<K, V> Hgg<K, V> {
     /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
     /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
     /// distance functions. If your distance function is expensive, benchmark Hgg with this parameter set to `true`.
-    /// With this variable, there is no tradeoff. For some distance functions/key types this will be objectively better,
-    /// and for some it will be objectively worse. You will see that in the recall curve.
+    /// For some distance functions/key types this will be better, and for some it will be worse.
+    /// Benchmark your data and observe the recall curve to find out.
     pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
         Self {
             exclude_all_searched,
