@@ -1,8 +1,15 @@
 [package]
 name = "hgg"
 version = "0.1.0"
+authors = ["Geordon Worley <vadixidav@gmail.com>"]
 edition = "2018"
-resolver = "2"
+description = "Approximate nearest neighbor search collection"
+documentation = "https://docs.rs/hgg/"
+repository = "https://github.com/rust-cv/hgg"
+keywords = ["search", "knn", "ann", "nearest", "neighbor"]
+categories = ["no-std", "computer-vision", "data-structures"]
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 space = { version = "0.13.0", default-features = false }
