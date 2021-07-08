@@ -66,7 +66,7 @@ impl<K, V> Hgg<K, V> {
             node_counts: vec![],
             freshens: 1,
             exclude_all_searched: false,
-            insert_knn: 100,
+            insert_knn: 64,
         }
     }
 
@@ -102,11 +102,15 @@ impl<K, V> Hgg<K, V> {
         }
     }
 
-    /// Default value: `100`
+    /// Default value: `64`
     ///
     /// This controls the number of nearest neighbors used during insertion. Setting this higher will cause the graph
-    /// to become more connected.
+    /// to become more connected if your data has thick Voronoi boundaries.
     pub fn insert_knn(self, insert_knn: usize) -> Self {
+        assert!(
+            insert_knn > 0,
+            "insert_knn cant be less than 1 or graph will become disconnected"
+        );
         Self { insert_knn, ..self }
     }
 
@@ -393,6 +397,23 @@ where
             }));
             self.node_counts[layer] += 1;
 
+            // If we are on the last layer, we now have exactly two nodes on the last layer,
+            // and it is time to create a new layer.
+            if layer == self.layers() - 1 {
+                // Add edge to nearest neighbor (the only other node in this layer, the old root).
+                self.layer_add_edge(layer, found.node, node);
+                // Set the root to this node.
+                self.root = node;
+                // Create the new layer (totally empty).
+                self.nodes[node]
+                    .layers
+                    .push(HeaderVec::new(HggHeader { key, node }));
+                self.edges.push(0);
+                self.node_counts.push(1);
+                // No need to do the remaining checks.
+                break;
+            }
+
             // Do a knn search on this layer, starting at the found node.
             let knn: Vec<(usize, K)> = self
                 .search_layer_knn_from_weak(found, distance, &key, self.insert_knn)
@@ -400,28 +421,10 @@ where
                 .map(|(node, _, _)| (node.node, node.key.clone()))
                 .collect();
 
-            // Add edge to nearest neighbor.
-            self.layer_add_edge(layer, knn[0].0, node);
-
-            // If we are on the last layer, we now have exactly two nodes on the last layer,
-            // and it is time to create a new layer.
-            if layer == self.layers() - 1 {
-                // Set the root to this node.
-                self.root = node;
-                // Create the new layer (totally empty).
-                self.nodes[node].layers.push(HeaderVec::new(HggHeader {
-                    key: key.clone(),
-                    node,
-                }));
-                self.edges.push(0);
-                self.node_counts.push(1);
-            }
-
             // The initial neighbors only includes the edge we just added.
             let mut neighbors = Vec::with_capacity(self.insert_knn);
-            neighbors.push(knn[0].1.clone());
 
-            // Optimize its edges using stalest nodes.
+            // Optimize the node's neighborhood.
             let mut node_weak = self.layer_node_weak(layer, node);
             self.optimize_layer_neighborhood(layer, &mut node_weak, &knn, &mut neighbors);
 
@@ -484,9 +487,71 @@ where
     pub fn freshen(&mut self) {
         let freshens = self.freshens;
         for node in self.stales().take(freshens).collect::<Vec<_>>() {
-            // TODO: Remove node from a layer if all of its neighbors have another neighbor on the next layer.
+            // Start by reducing as many connections as possible on the layers it exists.
             for layer in 0..self.nodes[node].layers() {
                 self.optimize_layer_node(layer, node);
+            }
+            // Next we want to check, starting on this node's highest layer, if it should be added to the next layer.
+            for layer in self.nodes[node].layers() - 1..self.layers() {
+                // An edge case occurs if we are on the top layer.
+                if layer == self.layers() - 1 {
+                    // Check if this node is the root node.
+                    if node != self.root {
+                        // In this case, we just raised this node to this layer, and now we need to add a new layer.
+                        // Set the root to this node.
+                        self.root = node;
+                        // Create the new layer (totally empty).
+                        let key = self.nodes[node].key.clone();
+                        self.nodes[node]
+                            .layers
+                            .push(HeaderVec::new(HggHeader { key, node }));
+                        self.edges.push(0);
+                        self.node_counts.push(1);
+                    }
+                    // In either case, we are now done, as the top layer now has one node,
+                    // regardless of if it is this node or the other node.
+                    break;
+                }
+
+                // Check if there are no neighbors on the next layer.
+                // Check if any surrounding nodes are on the next layer.
+                if self
+                    .layer_node_weak(layer, node)
+                    .as_slice()
+                    .iter()
+                    .any(|HggEdge { neighbor, .. }| self.nodes[neighbor.node].layers() > layer + 1)
+                {
+                    // If any of the neighbors are on the next layer up, we don't need to add this node to more layers.
+                    break;
+                }
+
+                let key = self.nodes[node].key.clone();
+
+                // Add the new layer to this node.
+                self.nodes[node].layers.push(HeaderVec::new(HggHeader {
+                    key: key.clone(),
+                    node,
+                }));
+                // Note that since we are adding it to the NEXT layer, this (and further uses of layer)
+                // are layer + 1.
+                self.node_counts[layer + 1] += 1;
+
+                // Find the nearest neighbor on the next layer (by greedy search).
+                let (nn, distance) = self.search_to_layer_weak(layer + 1, &key).unwrap();
+
+                // Do a knn search on the next layer, starting at the found node.
+                let knn: Vec<(usize, K)> = self
+                    .search_layer_knn_from_weak(nn, distance, &key, self.insert_knn)
+                    .into_iter()
+                    .map(|(node, _, _)| (node.node, node.key.clone()))
+                    .collect();
+
+                // The initial neighbors only includes the edge we just added.
+                let mut neighbors = Vec::with_capacity(self.insert_knn);
+
+                // Optimize the node's neighborhood.
+                let mut node_weak = self.layer_node_weak(layer + 1, node);
+                self.optimize_layer_neighborhood(layer + 1, &mut node_weak, &knn, &mut neighbors);
             }
         }
     }
@@ -497,13 +562,22 @@ where
     ///
     /// Returns `(node, distance)`.
     fn search_weak(&self, query: &K) -> Option<(HVec<K>, K::Metric)> {
+        self.search_to_layer_weak(0, query)
+    }
+
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
+    ///
+    /// Returns `(node, distance)`.
+    fn search_to_layer_weak(&self, final_layer: usize, query: &K) -> Option<(HVec<K>, K::Metric)> {
         if self.is_empty() {
             return None;
         }
         let mut node = self.layer_node_weak(self.layers() - 1, self.root);
         let mut distance = node.key.distance(query);
         // This assumes that the top layer only contains one node (as it should).
-        for layer in (0..self.layers() - 1).rev() {
+        for layer in (final_layer..self.layers() - 1).rev() {
             node = self.layer_node_weak(layer, node.node);
             let (new_node, new_distance) = self.search_layer_from_weak(node, distance, query);
             node = new_node;
