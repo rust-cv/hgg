@@ -37,6 +37,8 @@ To make the graph into a "hierarchy", a simple method is used. When a node is in
 
 The last important thing is that as nodes are added to the graph, the graph is freshened. A linked list is formed in the graph which stores the order that this freshening occurs in. When a node is added, it is assumed to be the freshest node, and the next item in the list from this node is the stalest node. This forms a bizzare pattern in the nodes, since on each insert, we also freshen nodes, moving the freshest node in the linked list forward by some amount. The reason this freshening is done is to make sure that we don't have any unecessary edges in the graph. As we add nodes to the graph, we will add nodes inbetween each other, and it is important that all the edges are trimmed from these nodes so that the graph doesn't become too connected, which is wasteful. All we want is to make sure each node doesn't create a local minima on any greedy search through the graph, so extra edges simply slow down that process. We also want to make sure that if we freshen a node that it is added to the correct layer. Since we remove edges when freshening, it is possible that this node now no longer has a neighbor on the next layer up. If this is the case, we want to make sure that the node is moved up to the next layer so that all nodes have a graph neighbor on the next level.
 
+As opposed to HNSW, no PRNG is used anywhere in HGG, and it is fully deterministic.
+
 ## Recall Curve
 
 To generate the `akaze` file used in the `recall_akaze` example, you first need a large number of unique images. It is recommended that these images come from a vSLAM dataset (TUM, KITTI, etc) if you want to test the performance in that particular setting.
