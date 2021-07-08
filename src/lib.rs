@@ -103,7 +103,10 @@ impl<K, V> Hgg<K, V> {
     /// Default value: `64`
     ///
     /// This controls the number of nearest neighbors used during insertion. Setting this higher will cause the graph
-    /// to become more connected if your data has thick Voronoi boundaries.
+    /// to become more connected if your data has thick Voronoi boundaries. If this is true of your dataset (
+    /// usually due to using hamming distance or high dimensionality), then you may want to intentionally
+    /// set this lower to avoid consuming too much memory, which can decrease performance if slower
+    /// memory (such as swap space) is used.
     pub fn insert_knn(self, insert_knn: usize) -> Self {
         assert!(
             insert_knn > 0,
