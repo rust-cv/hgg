@@ -70,18 +70,10 @@ impl<K, V> Hgg<K, V> {
 
     /// Default value: `1`
     ///
-    /// If inserting gets too slow, increase this number to speed up insertion. Increasing it too high might
-    /// severely damage recall curve.
-    ///
     /// Increase the parameter `freshens` to freshen stale nodes in the graph. The higher this value, the longer the
-    /// insert will take. However, in the long run, freshening will substantially improve insert performance.
-    /// Counter-intuitively, if you freshen too infrequently, your graph will become too accurate/too connected.
-    /// If the graph grows too accurate, it worsens the recall curve and the insertion time will grow at a rate
-    /// that is closer to exponential. For all intents and purposes, increasing the hight of the recall curve
-    /// (Y = queries per second, X = recall) is your primary goal, so set `freshens` at the value which does this
-    /// for your dataset. You can set it to `0`, but this might cause problems. You can also reduce this temporarily
-    /// to do quick insertions before restoring it to a higher value, but if you leave it low, it will make insertions
-    /// slower overall.
+    /// insert will take. However, in the long run, freshening may improve insert performance. It is recommended
+    /// to benchmark with your data both the insert and lookup performance against recall using this
+    /// parameter to determine the right value for you. The default should be fine for most users.
     pub fn freshens(self, freshens: usize) -> Self {
         Self { freshens, ..self }
     }
