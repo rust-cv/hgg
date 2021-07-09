@@ -77,4 +77,4 @@ This file is populated as the benchmark runs. You can terminate the benchmark at
 
 ## Credits
 
-I (Geordon Worley) designed and created this data structure through emperical testing, random ideas, and a focus on data-dependence. However, I did not create this data structure out of thin air. It builds upon the work of [the HNSW paper](https://arxiv.org/pdf/1603.09320.pdf). Although the resultant data-structure is very different from HNSW, the concept of a hierarchy of nearest neighbor graphs is retained. This is why the name of the crate is Hierarchical Greedy Graphs, as homage to Hierarchical Navigable Small Worlds.
+I (Geordon Worley) designed and created this data structure through empirical testing, random ideas, and a focus on data-dependence. However, I did not create this data structure out of thin air. It builds upon the work of [the HNSW paper](https://arxiv.org/pdf/1603.09320.pdf). Although the resultant data-structure is very different from HNSW, the concept of a hierarchy of nearest neighbor graphs is retained. This is why the name of the crate is Hierarchical Greedy Graphs, as homage to Hierarchical Navigable Small Worlds.
