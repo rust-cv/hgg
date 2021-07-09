@@ -3,7 +3,7 @@ extern crate std;
 use hgg::Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::{Bits512, MetricPoint};
+use space::{Bits512, Knn, MetricPoint};
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.
@@ -21,7 +21,6 @@ struct Record {
     num_queries: usize,
     seconds_per_query: f64,
     queries_per_second: f64,
-    strategy: &'static str,
 }
 
 struct Dataset {
@@ -111,7 +110,8 @@ fn main() {
         eprintln!("Histogram layer nodes: {:?}", hgg.histogram_layer_nodes());
         eprintln!("Histogram neighbors: {:?}", hgg.histogram_neighbors());
 
-        eprintln!("Computing correct nearest neighbors for recall calculation");
+        eprintln!("Computing correct nearest neighbors for recall calculation using linear search");
+        let start_time = Instant::now();
         let correct_nn_distances: Vec<_> = test
             .iter()
             .map(|query| {
@@ -122,62 +122,42 @@ fn main() {
                     .unwrap()
             })
             .collect();
-        eprintln!("Finished computing the correct nearest neighbors");
+        let end_time = Instant::now();
+        eprintln!(
+            "Finished computing the correct nearest neighbors. Speed was {} queries per second",
+            test.len() as f64 / (end_time - start_time).as_secs_f64()
+        );
 
         for knn in 1..=HIGHEST_KNN {
-            for &strategy in &["zero", "regular", "wide"] {
-                eprintln!(
-                    "doing strategy \"{}\" size {} with knn {}",
-                    strategy,
-                    1 << pow,
-                    knn
-                );
-                let start_time = Instant::now();
-                let hgg_nn_distances: Vec<_> = match strategy {
-                    "zero" => test
-                        .iter()
-                        .map(|query| {
-                            hgg.search_layer_knn_from(0, 0, query, knn)
-                                .next()
-                                .unwrap()
-                                .1
-                        })
-                        .collect(),
-                    "regular" => test
-                        .iter()
-                        .map(|query| hgg.search_knn(query, knn).next().unwrap().1)
-                        .collect(),
-                    "wide" => test
-                        .iter()
-                        .map(|query| hgg.search_knn_wide(query, knn).next().unwrap().1)
-                        .collect(),
-                    _ => panic!("unexpected stratgy {}", strategy),
-                };
-                let end_time = Instant::now();
-                let num_correct = correct_nn_distances
-                    .iter()
-                    .copied()
-                    .zip(hgg_nn_distances)
-                    .filter(|&(correct_distance, hgg_distance)| correct_distance == hgg_distance)
-                    .count();
-                let recall = num_correct as f64 / test.len() as f64;
-                let seconds_per_query = (end_time - start_time)
-                    .div_f64(test.len() as f64)
-                    .as_secs_f64();
-                let queries_per_second = seconds_per_query.recip();
-                csv_out
-                    .serialize(Record {
-                        recall,
-                        search_size: 1 << pow,
-                        knn,
-                        num_queries: test.len(),
-                        seconds_per_query,
-                        queries_per_second,
-                        strategy,
-                    })
-                    .expect("failed to serialize record");
-                csv_out.flush().expect("failed to flush record");
-            }
+            eprintln!("doing size {} with knn {}", 1 << pow, knn);
+            let start_time = Instant::now();
+            let hgg_nn_distances: Vec<_> = test
+                .iter()
+                .map(|query| hgg.knn(query, knn)[0].distance)
+                .collect();
+            let end_time = Instant::now();
+            let num_correct = correct_nn_distances
+                .iter()
+                .copied()
+                .zip(hgg_nn_distances)
+                .filter(|&(correct_distance, hgg_distance)| correct_distance == hgg_distance)
+                .count();
+            let recall = num_correct as f64 / test.len() as f64;
+            let seconds_per_query = (end_time - start_time)
+                .div_f64(test.len() as f64)
+                .as_secs_f64();
+            let queries_per_second = seconds_per_query.recip();
+            csv_out
+                .serialize(Record {
+                    recall,
+                    search_size: 1 << pow,
+                    knn,
+                    num_queries: test.len(),
+                    seconds_per_query,
+                    queries_per_second,
+                })
+                .expect("failed to serialize record");
+            csv_out.flush().expect("failed to flush record");
         }
     }
 }

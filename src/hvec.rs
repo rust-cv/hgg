@@ -5,7 +5,6 @@ use core::{
     ops::{Deref, DerefMut},
 };
 use header_vec::HeaderVecWeak;
-use space::MetricPoint;
 
 #[derive(Debug)]
 pub(crate) struct HggEdge<K> {
@@ -31,20 +30,6 @@ impl<K> HVec<K> {
         self.as_slice()
             .iter()
             .any(|edge| edge.neighbor.is(other.ptr()))
-    }
-}
-
-impl<K> HVec<K>
-where
-    K: MetricPoint,
-{
-    pub fn neighbors_distance<'a>(
-        &'a self,
-        query: &'a K,
-    ) -> impl Iterator<Item = (Self, K::Metric)> + 'a {
-        self.as_slice()
-            .iter()
-            .map(move |HggEdge { key, neighbor }| (neighbor.weak(), query.distance(key)))
     }
 }
 

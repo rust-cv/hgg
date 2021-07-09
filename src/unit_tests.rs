@@ -3,7 +3,7 @@ extern crate std;
 use crate::Hgg;
 use alloc::vec::Vec;
 use rand::{Rng, SeedableRng};
-use space::Bits256;
+use space::{Bits256, Knn};
 use std::eprintln;
 
 #[test]
@@ -35,7 +35,7 @@ fn random_insertion_stats() {
             eprintln!("Searching {}", ix);
         }
         // Search each key.
-        let (_, distance) = hgg.search_layer_knn(0, key, 5).next().unwrap();
+        let distance = hgg.knn(key, 5)[0].distance;
         // Make sure that the best result is this key.
         assert_eq!(distance, 0);
     }
