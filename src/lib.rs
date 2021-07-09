@@ -7,7 +7,7 @@ mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{fmt::Debug, iter};
+use core::{fmt::Debug, iter, marker::PhantomData};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HggEdge, HggHeader};
@@ -15,8 +15,24 @@ use num_traits::Zero;
 use space::{Knn, MetricPoint, Neighbor};
 
 #[derive(Debug)]
+struct StrategyRegular;
+#[derive(Debug)]
+struct StrategyLite;
+
+/// An approximate nearest neighbor search collection that pairs keys to values.
+///
+/// Use this HGG when it can fit in your memory and if your key isnt isn't too large.
+/// It tends to be faster. If you have a situation where you are running out of memory or
+/// you just have a really large key, your distance function is incredibly expensive to the
+/// point where random access time in memory is irrelevant, or your key doesn't
+/// implement [`Clone`], then use [`HggLite`] in those cases.
+///
+/// If your distance function is very expensive, you may also want to look at [`Hgg::exclude_all_searched`].
+///
+/// Always remember to benchmark rather than guess when it comes to the above choices.
+#[derive(Debug)]
 pub struct Hgg<K, V> {
-    hgg: HggCore<K, V, K>,
+    hgg: HggCore<K, V, K, StrategyRegular>,
 }
 
 impl<K, V> Knn<K> for Hgg<K, V>
@@ -157,6 +173,161 @@ where
     }
 }
 
+/// An approximate nearest neighbor search collection that pairs keys to values.
+///
+/// Use this HGG when you are running out of memory or your keys are very large.
+/// This HGG tends to be slower, but may be faster with very large keys, especially if you are running out of RAM.
+/// If you have a situation where you are running out of memory or you just have a really large key,
+/// your distance function is incredibly expensive to the point where random access time in memory
+/// is irrelevant, or your key doesn't implement [`Clone`], then use [`HggLite`] in those cases.
+/// Otherwise, it is recommended to use [`Hgg`].
+///
+/// If your distance function is very expensive, you may also want to look at [`HggLite::exclude_all_searched`].
+///
+/// Always remember to benchmark rather than guess when it comes to the above choices.
+#[derive(Debug)]
+pub struct HggLite<K, V> {
+    hgg: HggCore<K, V, (), StrategyLite>,
+}
+
+impl<K, V> Knn<K> for HggLite<K, V>
+where
+    K: MetricPoint,
+{
+    type KnnIter = Vec<Neighbor<K::Metric>>;
+
+    fn knn(&self, query: &K, num: usize) -> Self::KnnIter {
+        self.hgg
+            .search_knn(query, num)
+            .map(|(index, distance)| Neighbor { index, distance })
+            .collect()
+    }
+
+    fn nn(&self, query: &K) -> Option<Neighbor<K::Metric>> {
+        self.hgg
+            .search(query)
+            .map(|(index, distance)| Neighbor { index, distance })
+    }
+}
+
+impl<K, V> HggLite<K, V>
+where
+    K: MetricPoint,
+{
+    /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
+    pub fn new() -> Self {
+        Self {
+            hgg: HggCore::new(),
+        }
+    }
+
+    /// Default value: `1`
+    ///
+    /// Increase the parameter `freshens` to freshen stale nodes in the graph. The higher this value, the longer the
+    /// insert will take. However, in the long run, freshening may improve insert performance. It is recommended
+    /// to benchmark with your data both the insert and lookup performance against recall using this
+    /// parameter to determine the right value for you. The default should be fine for most users.
+    pub fn freshens(self, freshens: usize) -> Self {
+        Self {
+            hgg: self.hgg.freshens(freshens),
+        }
+    }
+
+    /// Default value: `false`
+    ///
+    /// If this is true, when doing a kNN search, any key which has already had its distance computed will not be
+    /// computed again. kNN search (and insertion) is faster when this is set to `false` for keys with cheap
+    /// distance functions. If your distance function is expensive, benchmark Hgg with this parameter set to `true`.
+    /// For some distance functions/key types this will be better, and for some it will be worse.
+    /// Benchmark your data and observe the recall curve to find out.
+    pub fn exclude_all_searched(self, exclude_all_searched: bool) -> Self {
+        Self {
+            hgg: self.hgg.exclude_all_searched(exclude_all_searched),
+        }
+    }
+
+    /// Default value: `64`
+    ///
+    /// This controls the number of nearest neighbors used during insertion. Setting this higher will cause the graph
+    /// to become more connected if your data has thick Voronoi boundaries. If this is true of your dataset (
+    /// usually due to using hamming distance or high dimensionality), then you may want to intentionally
+    /// set this lower to avoid consuming too much memory, which can decrease performance if slower
+    /// memory (such as swap space) is used.
+    ///
+    /// For all datasets, this value correlates positively with insertion time (inversely with speed). If you want insertions to go faster,
+    /// consider decreasing this value.
+    pub fn insert_knn(self, insert_knn: usize) -> Self {
+        Self {
+            hgg: self.hgg.insert_knn(insert_knn),
+        }
+    }
+
+    /// Insert a (key, value) pair.
+    pub fn insert(&mut self, key: K, value: V) -> usize {
+        self.hgg.insert(key, value)
+    }
+
+    /// Get the (key, value) pair of a node.
+    pub fn get(&self, node: usize) -> Option<(&K, &V)> {
+        self.hgg.get(node)
+    }
+
+    /// Get the key of a node.
+    pub fn get_key(&self, node: usize) -> Option<&K> {
+        self.hgg.get_key(node)
+    }
+
+    /// Get the value of a node.
+    pub fn get_value(&self, node: usize) -> Option<&V> {
+        self.hgg.get_value(node)
+    }
+
+    /// Checks if the graph is empty.
+    pub fn is_empty(&self) -> bool {
+        self.hgg.is_empty()
+    }
+
+    /// Returns the number of (key, value) pairs added to the graph.
+    pub fn len(&self) -> usize {
+        self.hgg.len()
+    }
+
+    /// Returns the number of edges in the graph on each layer.
+    pub fn edges(&self) -> Vec<usize> {
+        self.hgg.edges()
+    }
+
+    /// Returns the number of layers in the graph.
+    pub fn layers(&self) -> usize {
+        self.hgg.layers()
+    }
+
+    pub fn histogram_layer_nodes(&self) -> Vec<usize> {
+        self.hgg.histogram_layer_nodes()
+    }
+
+    pub fn histogram_neighbors(&self) -> Vec<Vec<(usize, usize)>> {
+        self.hgg.histogram_neighbors()
+    }
+
+    pub fn average_neighbors(&self) -> Vec<f64> {
+        self.hgg.average_neighbors()
+    }
+
+    pub fn simple_representation(&self) -> Vec<Vec<Vec<usize>>> {
+        self.hgg.simple_representation()
+    }
+}
+
+impl<K, V> Default for HggLite<K, V>
+where
+    K: MetricPoint,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 struct HggNode<K, V, HK> {
     key: K,
@@ -175,7 +346,7 @@ impl<K, V, HK> HggNode<K, V, HK> {
 
 /// Collection for retrieving entries based on key proximity in a metric space.
 #[derive(Debug)]
-struct HggCore<K, V, HK> {
+struct HggCore<K, V, HK, Strategy> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
@@ -194,9 +365,10 @@ struct HggCore<K, V, HK> {
     exclude_all_searched: bool,
     /// Determines the number of nearest neighbors used for inserting.
     insert_knn: usize,
+    _phantom: PhantomData<Strategy>,
 }
 
-impl<K, V, HK> HggCore<K, V, HK> {
+impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
@@ -208,6 +380,7 @@ impl<K, V, HK> HggCore<K, V, HK> {
             freshens: 1,
             exclude_all_searched: false,
             insert_knn: 64,
+            _phantom: PhantomData,
         }
     }
 
@@ -349,8 +522,7 @@ impl<K, V, HK> HggCore<K, V, HK> {
         unsafe { HVec(self.nodes[node].layers[layer].weak()) }
     }
 }
-
-impl<K, V, HK> HggCore<K, V, HK>
+impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy>
 where
     K: MetricPoint,
     Self: HggInternal<K = K, V = V, HK = HK>,
@@ -752,7 +924,7 @@ where
     }
 }
 
-impl<K, V, HK> Default for HggCore<K, V, HK> {
+impl<K, V, HK, Strategy> Default for HggCore<K, V, HK, Strategy> {
     fn default() -> Self {
         Self::new()
     }
@@ -781,7 +953,7 @@ trait HggInternal {
     );
 }
 
-impl<K, V> HggInternal for HggCore<K, V, K>
+impl<K, V> HggInternal for HggCore<K, V, K, StrategyRegular>
 where
     K: MetricPoint + Clone,
 {
@@ -895,7 +1067,7 @@ where
     }
 }
 
-impl<K, V> HggCore<K, V, K>
+impl<K, V> HggCore<K, V, K, StrategyRegular>
 where
     K: MetricPoint + Clone,
 {
@@ -919,6 +1091,153 @@ where
                 let distance = node_key.distance(key);
                 let pos = neighbors.partition_point(|(_, k)| node_key.distance(k) <= distance);
                 neighbors.insert(pos, (neighbor.node, key.clone()));
+            }
+            neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
+        }
+        node.retain(|_| false);
+    }
+}
+
+impl<K, V> HggInternal for HggCore<K, V, (), StrategyLite>
+where
+    K: MetricPoint,
+{
+    type K = K;
+    type V = V;
+    type HK = ();
+
+    fn make_edge_to_node(&self, node: &HVec<Self::HK>) -> HggEdge<Self::HK> {
+        HggEdge {
+            key: (),
+            neighbor: node.weak(),
+        }
+    }
+
+    fn edge_get_key<'a>(&'a self, edge: &'a HggEdge<Self::HK>) -> &'a K {
+        &self.nodes[edge.neighbor.node].key
+    }
+
+    fn node_get_key<'a>(&'a self, node: &'a HVec<Self::HK>) -> &'a K {
+        &self.nodes[node.node].key
+    }
+
+    fn add_node_layer(&mut self, node: usize) {
+        self.nodes[node]
+            .layers
+            .push(HeaderVec::new(HggHeader { key: (), node }));
+    }
+
+    fn optimize_layer_neighborhood(
+        &mut self,
+        layer: usize,
+        node: usize,
+        found: usize,
+        distance: K::Metric,
+        reconnect: bool,
+    ) {
+        // Get the node's weak ref.
+        let mut node = self.layer_node_weak(layer, node);
+
+        // Do a knn search on this layer, starting at the found node.
+        let mut knn: Vec<usize> = self
+            .search_layer_knn_from_weak(
+                self.layer_node_weak(layer, found),
+                distance,
+                &self.nodes[node.node].key,
+                self.insert_knn,
+            )
+            .into_iter()
+            .skip(if reconnect { 1 } else { 0 })
+            .map(|(neighbor, _, _)| neighbor.node)
+            .collect();
+
+        // If we are reconnecting the node, we need to disconnect its edges first.
+        if reconnect {
+            self.disconnect_layer(layer, &mut node, &mut knn);
+        }
+
+        // The initial neighbors only includes the edge we just added.
+        let mut neighbors: Vec<usize> = Vec::with_capacity(self.insert_knn);
+
+        let mut knn_index = 0;
+        'knn_next: while let Some(target_node) = knn.get(knn_index).copied() {
+            // Get this node's distance.
+            let to_beat = self.nodes[node.node]
+                .key
+                .distance(&self.nodes[target_node].key);
+            // Check if the node is colocated.
+            if to_beat == Zero::zero() {
+                // In this case, add an edge (with dedup) between them to make sure there is a path.
+                self.layer_add_edge_dedup_weak(
+                    layer,
+                    &mut node,
+                    &mut self.layer_node_weak(layer, target_node),
+                );
+                knn_index += 1;
+                continue 'knn_next;
+            }
+
+            if neighbors.iter().any(|&neighbor| {
+                self.nodes[neighbor]
+                    .key
+                    .distance(&self.nodes[target_node].key)
+                    < to_beat
+            }) {
+                // If any are better, then no optimization needed.
+                knn_index += 1;
+                continue 'knn_next;
+            }
+
+            // Go through the nearest neighbors in order from best to worst.
+            for nn in knn.iter().copied() {
+                // Compute the distance to the target from the nn.
+                let nn_distance = self.nodes[nn].key.distance(&self.nodes[target_node].key);
+                // Add the node as a neighbor (closer or not).
+                // This will update the weak ref if necessary.
+                if self.layer_add_edge_dedup_weak(
+                    layer,
+                    &mut self.layer_node_weak(layer, nn),
+                    &mut node,
+                ) {
+                    neighbors.push(nn);
+                }
+                // Check if this node is closer to the target than `from`.
+                if nn_distance < to_beat {
+                    // The greedy path now exists, so exit.
+                    knn_index += 1;
+                    continue 'knn_next;
+                }
+            }
+            unreachable!(
+                "we should always be able to connect to all the neighbors using themselves"
+            );
+        }
+    }
+}
+
+impl<K, V> HggCore<K, V, (), StrategyLite>
+where
+    K: MetricPoint,
+{
+    /// Internal function for disconnecting a node from the graph on the layer this HVec exists on.
+    ///
+    /// Returns nodes as usize because as nodes are re-added, it is possible that neighbors reallocate
+    /// and break the weak pointers.
+    ///
+    /// Returns (node, distance) pairs.
+    fn disconnect_layer(&mut self, layer: usize, node: &mut HVec<()>, neighbors: &mut Vec<usize>) {
+        let ptr = node.ptr();
+        self.edges[layer] -= node.len();
+        let node_index = node.node;
+        for HggEdge { neighbor, .. } in node.as_mut_slice() {
+            if !neighbors.iter().any(|&cn| cn == neighbor.node) {
+                let distance = self.nodes[neighbor.node]
+                    .key
+                    .distance(&self.nodes[node_index].key);
+                let pos = neighbors.partition_point(|&cnn| {
+                    self.nodes[cnn].key.distance(&self.nodes[node_index].key) <= distance
+                });
+                neighbors.insert(pos, neighbor.node);
             }
             neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
         }
