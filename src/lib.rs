@@ -30,6 +30,8 @@ struct StrategyLite;
 /// If your distance function is very expensive, you may also want to look at [`Hgg::exclude_all_searched`].
 ///
 /// Always remember to benchmark rather than guess when it comes to the above choices.
+///
+/// If you are looking for how to perform kNN searches, see `impl<K, V> Knn<K> for Hgg<K, V>` below.
 #[derive(Debug)]
 pub struct Hgg<K, V> {
     hgg: HggCore<K, V, K, StrategyRegular>,
@@ -185,6 +187,8 @@ where
 /// If your distance function is very expensive, you may also want to look at [`HggLite::exclude_all_searched`].
 ///
 /// Always remember to benchmark rather than guess when it comes to the above choices.
+///
+/// If you are looking for how to perform kNN searches, see `impl<K, V> Knn<K> for HggLite<K, V>` below.
 #[derive(Debug)]
 pub struct HggLite<K, V> {
     hgg: HggCore<K, V, (), StrategyLite>,
