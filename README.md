@@ -69,11 +69,8 @@ runrecall recall
 This will begin running the program. You will see the following start to appear into `recall.csv`:
 
 ```csv
-recall,search_size,knn,num_queries,seconds_per_query,queries_per_second,strategy
-1.0,1,1,32768,1.58e-7,6329113.924050633,zero
-1.0,1,1,32768,2.01e-7,4975124.378109452,regular
-1.0,1,1,32768,7.8e-8,12820512.820512822,wide
-1.0,1,2,32768,1.61e-7,6211180.124223603,zero
+recall,search_size,knn,num_queries,seconds_per_query,queries_per_second
+1.0,1,1,32768,1.58e-7,6329113.924050633
 ```
 
 This file is populated as the benchmark runs. You can terminate the benchmark at any time with Ctrl+C, and the results computed so far will remain in this CSV file. It can be imported into a spreadsheet processor to generate graphs.
