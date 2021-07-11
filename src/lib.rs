@@ -2,6 +2,8 @@
 extern crate alloc;
 
 mod hvec;
+#[cfg(feature = "serde")]
+mod serde_impl;
 #[cfg(test)]
 mod unit_tests;
 
@@ -17,6 +19,8 @@ use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HggEdge, HggHeader};
 use num_traits::Zero;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 use space::{Knn, MetricPoint, Neighbor};
 
 #[derive(Debug)]
@@ -38,6 +42,14 @@ struct StrategyLite;
 ///
 /// If you are looking for how to perform kNN searches, see `impl<K, V> Knn<K> for Hgg<K, V>` below.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(bound(
+        serialize = "K: Serialize, V: Serialize",
+        deserialize = "K: Deserialize<'de> + Clone, V: Deserialize<'de>"
+    ))
+)]
 pub struct Hgg<K, V> {
     hgg: HggCore<K, V, K, StrategyRegular>,
 }
@@ -354,9 +366,9 @@ impl<K, V, HK> HggNode<K, V, HK> {
 }
 
 #[derive(Debug)]
-struct NodeStorage<K, V, HK>(Vec<HggNode<K, V, HK>>);
+struct NodeStorage<K, V, HK, Strategy>(Vec<HggNode<K, V, HK>>, PhantomData<Strategy>);
 
-impl<K, V, HK> Deref for NodeStorage<K, V, HK> {
+impl<K, V, HK, Strategy> Deref for NodeStorage<K, V, HK, Strategy> {
     type Target = Vec<HggNode<K, V, HK>>;
 
     fn deref(&self) -> &Self::Target {
@@ -364,7 +376,7 @@ impl<K, V, HK> Deref for NodeStorage<K, V, HK> {
     }
 }
 
-impl<K, V, HK> DerefMut for NodeStorage<K, V, HK> {
+impl<K, V, HK, Strategy> DerefMut for NodeStorage<K, V, HK, Strategy> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -372,11 +384,19 @@ impl<K, V, HK> DerefMut for NodeStorage<K, V, HK> {
 
 /// Collection for retrieving entries based on key proximity in a metric space.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(bound(
+        serialize = "K: Serialize, V: Serialize, NodeStorage<K, V, HK, Strategy>: Serialize",
+        deserialize = "K: Deserialize<'de>, V: Deserialize<'de>, NodeStorage<K, V, HK, Strategy>: Deserialize<'de>"
+    ))
+)]
 struct HggCore<K, V, HK, Strategy> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
-    nodes: NodeStorage<K, V, HK>,
+    nodes: NodeStorage<K, V, HK, Strategy>,
     /// This node exists on the top layer, and is the root of all searches.
     root: usize,
     /// The node which has been cleaned up/inserted most recently.
@@ -398,7 +418,7 @@ impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
-            nodes: NodeStorage(vec![]),
+            nodes: NodeStorage(vec![], PhantomData),
             root: 0,
             freshest: 0,
             edges: vec![],
