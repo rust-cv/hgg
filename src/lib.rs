@@ -7,7 +7,12 @@ mod unit_tests;
 
 use ahash::RandomState;
 use alloc::{vec, vec::Vec};
-use core::{fmt::Debug, iter, marker::PhantomData};
+use core::{
+    fmt::Debug,
+    iter,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 use hashbrown::HashSet;
 use header_vec::HeaderVec;
 use hvec::{HVec, HggEdge, HggHeader};
@@ -348,13 +353,30 @@ impl<K, V, HK> HggNode<K, V, HK> {
     }
 }
 
+#[derive(Debug)]
+struct NodeStorage<K, V, HK>(Vec<HggNode<K, V, HK>>);
+
+impl<K, V, HK> Deref for NodeStorage<K, V, HK> {
+    type Target = Vec<HggNode<K, V, HK>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<K, V, HK> DerefMut for NodeStorage<K, V, HK> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Collection for retrieving entries based on key proximity in a metric space.
 #[derive(Debug)]
 struct HggCore<K, V, HK, Strategy> {
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
-    nodes: Vec<HggNode<K, V, HK>>,
+    nodes: NodeStorage<K, V, HK>,
     /// This node exists on the top layer, and is the root of all searches.
     root: usize,
     /// The node which has been cleaned up/inserted most recently.
@@ -376,7 +398,7 @@ impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
     pub fn new() -> Self {
         Self {
-            nodes: vec![],
+            nodes: NodeStorage(vec![]),
             root: 0,
             freshest: 0,
             edges: vec![],
@@ -471,7 +493,7 @@ impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
 
     pub fn histogram_layer_nodes(&self) -> Vec<usize> {
         let mut layers = vec![0; self.layers()];
-        for node in &self.nodes {
+        for node in &*self.nodes {
             for layer in &mut layers[0..node.layers()] {
                 *layer += 1;
             }
@@ -508,7 +530,7 @@ impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
 
     pub fn simple_representation(&self) -> Vec<Vec<Vec<usize>>> {
         let mut layers = vec![vec![]; self.layers()];
-        for node in &self.nodes {
+        for node in &*self.nodes {
             for (layer, layer_node) in node.layers.iter().enumerate() {
                 layers[layer].push(
                     layer_node
@@ -539,15 +561,16 @@ where
         // The current freshest node's `next` is the stalest node, which will subsequently become
         // the freshest when freshened. If this is the only node, looking up the freshest node will fail.
         // Due to that, we set this node's next to itself if its the only node.
+        let next = if node == 0 {
+            0
+        } else {
+            self.nodes[self.freshest].next
+        };
         self.nodes.push(HggNode {
             key,
             value,
             layers: vec![],
-            next: if node == 0 {
-                0
-            } else {
-                self.nodes[self.freshest].next
-            },
+            next,
         });
         // The previous freshest node should now be freshened right before this node, as this node is now fresher.
         // Even if this is the only node, this will still work because this node still comes after itself in the freshening order.
