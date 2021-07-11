@@ -17,6 +17,10 @@ jobs:
           toolchain: nightly
           override: true
 
+      - uses: Swatinem/rust-cache@v1
+        with:
+          cache-on-failure: true
+
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
