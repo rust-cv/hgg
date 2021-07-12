@@ -1,10 +1,10 @@
 extern crate std;
 
+use bitarray::BitArray;
 use hgg::Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::{Knn};
-use bitarray::BitArray;
+use space::Knn;
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.

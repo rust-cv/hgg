@@ -2,9 +2,9 @@ extern crate std;
 
 use crate::Hgg;
 use alloc::vec::Vec;
-use rand::{Rng, SeedableRng};
-use space::{Knn};
 use bitarray::BitArray;
+use rand::{Rng, SeedableRng};
+use space::Knn;
 use std::eprintln;
 
 #[test]
