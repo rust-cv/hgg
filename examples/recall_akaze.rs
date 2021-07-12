@@ -3,7 +3,8 @@ extern crate std;
 use hgg::Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::{Bits512, Knn, MetricPoint};
+use space::{Knn};
+use bitarray::BitArray;
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.
@@ -24,8 +25,8 @@ struct Record {
 }
 
 struct Dataset {
-    search: Vec<Bits512>,
-    test: Vec<Bits512>,
+    search: Vec<BitArray<64>>,
+    test: Vec<BitArray<64>>,
 }
 
 fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
@@ -48,14 +49,14 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
     eprintln!("Finished reading descriptors from file. Converting to keys.");
 
     // Convert the data into descriptors.
-    let mut all: Vec<Bits512> = v
+    let mut all: Vec<BitArray<64>> = v
         .chunks_exact(descriptor_size_bytes)
         .map(|b| {
             let mut arr = [0; 64];
             for (d, &s) in arr.iter_mut().zip(b) {
                 *d = s;
             }
-            Bits512(arr)
+            BitArray::new(arr)
         })
         .collect();
     drop(v);

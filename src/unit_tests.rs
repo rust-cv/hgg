@@ -3,20 +3,21 @@ extern crate std;
 use crate::Hgg;
 use alloc::vec::Vec;
 use rand::{Rng, SeedableRng};
-use space::{Bits256, Knn};
+use space::{Knn};
+use bitarray::BitArray;
 use std::eprintln;
 
 #[test]
 fn random_insertion_stats() {
-    let mut hgg: Hgg<Bits256, ()> = Hgg::new().insert_knn(100);
+    let mut hgg: Hgg<BitArray<32>, ()> = Hgg::new().insert_knn(100);
 
     // Use a PRNG with good statistical properties for generating 64-bit numbers.
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
     // Generate random keys.
-    let keys: Vec<Bits256> = (&mut rng)
+    let keys: Vec<BitArray<32>> = (&mut rng)
         .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
-        .map(Bits256)
+        .map(BitArray::new)
         .take(1 << 12)
         .collect();
 

@@ -5,20 +5,21 @@ extern crate std;
 
 use hgg::Hgg;
 use rand::{Rng, SeedableRng};
-use space::{Bits256, Knn};
+use space::{Knn};
+use bitarray::BitArray;
 
 #[test]
 fn serde_json_bincode_round_trip() {
-    let mut hgg: Hgg<Bits256, ()> = Hgg::new().insert_knn(100);
+    let mut hgg: Hgg<BitArray<32>, ()> = Hgg::new().insert_knn(100);
 
     // Use a PRNG with good statistical properties for generating 64-bit numbers.
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
 
     // Generate random keys.
-    let keys: Vec<Bits256> = (&mut rng)
+    let keys: Vec<BitArray<32>> = (&mut rng)
         .sample_iter::<[u8; 32], _>(rand::distributions::Standard)
-        .map(Bits256)
-        .take(1 << 6)
+        .map(BitArray::new)
+        .take(1 << 10)
         .collect();
 
     // Insert keys into HGG.
@@ -33,13 +34,13 @@ fn serde_json_bincode_round_trip() {
     let old_knns: Vec<Vec<_>> = keys.iter().map(|k| hgg.knn(k, 10)).collect();
 
     // Serialize and deserialize with both serde_json and bincode back-to-back.
-    let hgg: Hgg<Bits256, ()> = serde_json::from_str(
+    let hgg: Hgg<BitArray<32>, ()> = serde_json::from_str(
         &serde_json::to_string(&hgg).expect("failed to serialize with serde_json"),
     )
     .expect("failed to deserialize with serde_json");
     let mut bdata = vec![];
     bincode::serialize_into(&mut bdata, &hgg).expect("failed to serialize with bincode");
-    let hgg: Hgg<Bits256, ()> =
+    let hgg: Hgg<BitArray<32>, ()> =
         bincode::deserialize_from(bdata.as_slice()).expect("failed to deserialize with bincode");
 
     // Find the 10 nearest neighbors to every node again.
