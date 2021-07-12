@@ -30,6 +30,11 @@ jobs:
   clippy:
     name: clippy
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - 
+          - --features serde
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -42,8 +47,12 @@ jobs:
           override: true
           components: clippy
 
+      - uses: Swatinem/rust-cache@v1
+        with:
+          cache-on-failure: true
+
       - name: Run cargo clippy
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: ${{ matrix.features }} -- -D warnings

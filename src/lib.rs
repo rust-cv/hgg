@@ -207,6 +207,14 @@ where
 ///
 /// If you are looking for how to perform kNN searches, see `impl<K, V> Knn<K> for HggLite<K, V>` below.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(bound(
+        serialize = "K: Serialize, V: Serialize",
+        deserialize = "K: Deserialize<'de>, V: Deserialize<'de>"
+    ))
+)]
 pub struct HggLite<K, V> {
     hgg: HggCore<K, V, (), StrategyLite>,
 }
