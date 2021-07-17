@@ -21,7 +21,7 @@ use hvec::{HVec, HggEdge, HggHeader};
 use num_traits::Zero;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use space::{Knn, MetricPoint, Neighbor};
+use space::{Knn, KnnMap, KnnPoints, MetricPoint, Neighbor};
 
 #[derive(Debug)]
 struct StrategyRegular;
@@ -71,6 +71,24 @@ where
         self.hgg
             .search(query)
             .map(|(index, distance)| Neighbor { index, distance })
+    }
+}
+
+impl<K, V> KnnPoints<K> for Hgg<K, V>
+where
+    K: MetricPoint + Clone,
+{
+    fn get_point(&self, index: usize) -> &'_ K {
+        self.get_key(index).unwrap()
+    }
+}
+
+impl<K, V> KnnMap<K, V> for Hgg<K, V>
+where
+    K: MetricPoint + Clone,
+{
+    fn get_value(&self, index: usize) -> &'_ V {
+        self.get_value(index).unwrap()
     }
 }
 
@@ -236,6 +254,24 @@ where
         self.hgg
             .search(query)
             .map(|(index, distance)| Neighbor { index, distance })
+    }
+}
+
+impl<K, V> KnnPoints<K> for HggLite<K, V>
+where
+    K: MetricPoint,
+{
+    fn get_point(&self, index: usize) -> &'_ K {
+        self.get_key(index).unwrap()
+    }
+}
+
+impl<K, V> KnnMap<K, V> for HggLite<K, V>
+where
+    K: MetricPoint,
+{
+    fn get_value(&self, index: usize) -> &'_ V {
+        self.get_value(index).unwrap()
     }
 }
 
