@@ -21,7 +21,7 @@ use hvec::{HVec, HggEdge, HggHeader};
 use num_traits::Zero;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use space::{Knn, KnnMap, KnnPoints, MetricPoint, Neighbor};
+use space::{Knn, KnnInsert, KnnMap, KnnPoints, Metric, Neighbor};
 
 #[derive(Debug)]
 struct StrategyRegular;
@@ -46,19 +46,23 @@ struct StrategyLite;
     feature = "serde",
     derive(Serialize, Deserialize),
     serde(bound(
-        serialize = "K: Serialize, V: Serialize",
-        deserialize = "K: Deserialize<'de> + Clone, V: Deserialize<'de>"
+        serialize = "M: Serialize, K: Serialize, V: Serialize",
+        deserialize = "M: Deserialize<'de>, K: Deserialize<'de> + Clone, V: Deserialize<'de>"
     ))
 )]
-pub struct Hgg<K, V> {
-    hgg: HggCore<K, V, K, StrategyRegular>,
+pub struct Hgg<M, K, V> {
+    hgg: HggCore<M, K, V, K, StrategyRegular>,
 }
 
-impl<K, V> Knn<K> for Hgg<K, V>
+impl<M, K, V> Knn for Hgg<M, K, V>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
 {
-    type KnnIter = Vec<Neighbor<K::Metric>>;
+    type Ix = usize;
+    type Metric = M;
+    type Point = K;
+    type KnnIter = Vec<Neighbor<M::Unit>>;
 
     fn knn(&self, query: &K, num: usize) -> Self::KnnIter {
         self.hgg
@@ -66,40 +70,59 @@ where
             .map(|(index, distance)| Neighbor { index, distance })
             .collect()
     }
-
-    fn nn(&self, query: &K) -> Option<Neighbor<K::Metric>> {
-        self.hgg
-            .search(query)
-            .map(|(index, distance)| Neighbor { index, distance })
-    }
 }
 
-impl<K, V> KnnPoints<K> for Hgg<K, V>
+impl<M, K, V> KnnPoints for Hgg<M, K, V>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
 {
     fn get_point(&self, index: usize) -> &'_ K {
         self.get_key(index).unwrap()
     }
 }
 
-impl<K, V> KnnMap<K, V> for Hgg<K, V>
+impl<M, K, V> KnnMap for Hgg<M, K, V>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
 {
+    type Value = V;
     fn get_value(&self, index: usize) -> &'_ V {
         self.get_value(index).unwrap()
     }
 }
 
-impl<K, V> Hgg<K, V>
+impl<M, K, V> KnnInsert for Hgg<M, K, V>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
+{
+    fn insert(&mut self, key: Self::Point, value: Self::Value) -> usize {
+        self.hgg.insert(key, value)
+    }
+}
+
+impl<M, K, V> Hgg<M, K, V>
+where
+    M: Metric<K>,
+    K: Clone,
 {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
-    pub fn new() -> Self {
+    pub fn new(metric: M) -> Self {
         Self {
-            hgg: HggCore::new(),
+            hgg: HggCore::new(metric),
+        }
+    }
+
+    /// Default value: `16`
+    ///
+    /// Decrease this to speed up at the expense of recall, and vice versa.
+    ///
+    /// The number of nearest neighbors to add on top of the number requested to increase recall.
+    pub fn search_extra_knn(self, search_extra_knn: usize) -> Self {
+        Self {
+            hgg: self.hgg.search_extra_knn(search_extra_knn),
         }
     }
 
@@ -144,9 +167,14 @@ where
         }
     }
 
-    /// Insert a (key, value) pair.
-    pub fn insert(&mut self, key: K, value: V) -> usize {
-        self.hgg.insert(key, value)
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This does not utilize [`Self::search_extra_knn`]. It is specialized to search greedily
+    /// keeping track of only one best node at a time.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn greedy(&self, query: &K) -> Option<(usize, M::Unit)> {
+        self.hgg.search(query)
     }
 
     /// Get the (key, value) pair of a node.
@@ -201,12 +229,13 @@ where
     }
 }
 
-impl<K, V> Default for Hgg<K, V>
+impl<M, K, V> Default for Hgg<M, K, V>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K> + Default,
+    K: Clone,
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(M::default())
     }
 }
 
@@ -229,19 +258,22 @@ where
     feature = "serde",
     derive(Serialize, Deserialize),
     serde(bound(
-        serialize = "K: Serialize, V: Serialize",
-        deserialize = "K: Deserialize<'de>, V: Deserialize<'de>"
+        serialize = "M: Serialize, K: Serialize, V: Serialize",
+        deserialize = "M: Deserialize<'de>, K: Deserialize<'de>, V: Deserialize<'de>"
     ))
 )]
-pub struct HggLite<K, V> {
-    hgg: HggCore<K, V, (), StrategyLite>,
+pub struct HggLite<M, K, V> {
+    hgg: HggCore<M, K, V, (), StrategyLite>,
 }
 
-impl<K, V> Knn<K> for HggLite<K, V>
+impl<M, K, V> Knn for HggLite<M, K, V>
 where
-    K: MetricPoint,
+    M: Metric<K>,
 {
-    type KnnIter = Vec<Neighbor<K::Metric>>;
+    type Ix = usize;
+    type Metric = M;
+    type Point = K;
+    type KnnIter = Vec<Neighbor<M::Unit>>;
 
     fn knn(&self, query: &K, num: usize) -> Self::KnnIter {
         self.hgg
@@ -249,40 +281,55 @@ where
             .map(|(index, distance)| Neighbor { index, distance })
             .collect()
     }
-
-    fn nn(&self, query: &K) -> Option<Neighbor<K::Metric>> {
-        self.hgg
-            .search(query)
-            .map(|(index, distance)| Neighbor { index, distance })
-    }
 }
 
-impl<K, V> KnnPoints<K> for HggLite<K, V>
+impl<M, K, V> KnnPoints for HggLite<M, K, V>
 where
-    K: MetricPoint,
+    M: Metric<K>,
 {
     fn get_point(&self, index: usize) -> &'_ K {
         self.get_key(index).unwrap()
     }
 }
 
-impl<K, V> KnnMap<K, V> for HggLite<K, V>
+impl<M, K, V> KnnMap for HggLite<M, K, V>
 where
-    K: MetricPoint,
+    M: Metric<K>,
 {
+    type Value = V;
     fn get_value(&self, index: usize) -> &'_ V {
         self.get_value(index).unwrap()
     }
 }
 
-impl<K, V> HggLite<K, V>
+impl<M, K, V> KnnInsert for HggLite<M, K, V>
 where
-    K: MetricPoint,
+    M: Metric<K>,
+{
+    fn insert(&mut self, key: Self::Point, value: Self::Value) -> usize {
+        self.hgg.insert(key, value)
+    }
+}
+
+impl<M, K, V> HggLite<M, K, V>
+where
+    M: Metric<K>,
 {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
-    pub fn new() -> Self {
+    pub fn new(metric: M) -> Self {
         Self {
-            hgg: HggCore::new(),
+            hgg: HggCore::new(metric),
+        }
+    }
+
+    /// Default value: `16`
+    ///
+    /// Decrease this to speed up at the expense of recall, and vice versa.
+    ///
+    /// The number of nearest neighbors to add on top of the number requested to increase recall.
+    pub fn search_extra_knn(self, search_extra_knn: usize) -> Self {
+        Self {
+            hgg: self.hgg.search_extra_knn(search_extra_knn),
         }
     }
 
@@ -327,9 +374,14 @@ where
         }
     }
 
-    /// Insert a (key, value) pair.
-    pub fn insert(&mut self, key: K, value: V) -> usize {
-        self.hgg.insert(key, value)
+    /// Searches for the nearest neighbor greedily from the top layer to the bottom.
+    ///
+    /// This does not utilize [`Self::search_extra_knn`]. It is specialized to search greedily
+    /// keeping track of only one best node at a time.
+    ///
+    /// Returns `(node, distance)`.
+    pub fn greedy(&self, query: &K) -> Option<(usize, M::Unit)> {
+        self.hgg.search(query)
     }
 
     /// Get the (key, value) pair of a node.
@@ -384,12 +436,12 @@ where
     }
 }
 
-impl<K, V> Default for HggLite<K, V>
+impl<M, K, V> Default for HggLite<M, K, V>
 where
-    K: MetricPoint,
+    M: Metric<K> + Default,
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(M::default())
     }
 }
 
@@ -432,11 +484,13 @@ impl<K, V, HK, Strategy> DerefMut for NodeStorage<K, V, HK, Strategy> {
     feature = "serde",
     derive(Serialize, Deserialize),
     serde(bound(
-        serialize = "K: Serialize, V: Serialize, NodeStorage<K, V, HK, Strategy>: Serialize",
-        deserialize = "K: Deserialize<'de>, V: Deserialize<'de>, NodeStorage<K, V, HK, Strategy>: Deserialize<'de>"
+        serialize = "M: Serialize, K: Serialize, V: Serialize, NodeStorage<K, V, HK, Strategy>: Serialize",
+        deserialize = "M: Deserialize<'de>, K: Deserialize<'de>, V: Deserialize<'de>, NodeStorage<K, V, HK, Strategy>: Deserialize<'de>"
     ))
 )]
-struct HggCore<K, V, HK, Strategy> {
+struct HggCore<M, K, V, HK, Strategy> {
+    /// The metric for this HGG.
+    metric: M,
     /// The nodes of the graph. These nodes internally contain their own edges which form
     /// subgraphs of decreasing size called "layers". The lowest layer contains every node,
     /// while the highest layer contains only one node.
@@ -449,6 +503,8 @@ struct HggCore<K, V, HK, Strategy> {
     edges: Vec<usize>,
     /// The number of nodes in the graph on each layer.
     node_counts: Vec<usize>,
+    /// The number of nearest neighbors to add on top of the number requested to increase recall.
+    search_extra_knn: usize,
     /// Number of freshens per insert.
     freshens: usize,
     /// Whether to exclude all keys for which the distance has been calculated in kNN search.
@@ -458,19 +514,33 @@ struct HggCore<K, V, HK, Strategy> {
     _phantom: PhantomData<Strategy>,
 }
 
-impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
+impl<M, K, V, HK, Strategy> HggCore<M, K, V, HK, Strategy> {
     /// Creates a new [`Hgg`]. It will be empty and begin with default settings.
-    pub fn new() -> Self {
+    pub fn new(metric: M) -> Self {
         Self {
+            metric,
             nodes: NodeStorage(vec![], PhantomData),
             root: 0,
             freshest: 0,
             edges: vec![],
             node_counts: vec![],
+            search_extra_knn: 16,
             freshens: 1,
             exclude_all_searched: false,
             insert_knn: 64,
             _phantom: PhantomData,
+        }
+    }
+
+    /// Default value: `16`
+    ///
+    /// Decrease this to speed up at the expense of recall, and vice versa.
+    ///
+    /// The number of nearest neighbors to add on top of the number requested to increase recall.
+    pub fn search_extra_knn(self, search_extra_knn: usize) -> Self {
+        Self {
+            search_extra_knn,
+            ..self
         }
     }
 
@@ -612,10 +682,10 @@ impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy> {
         unsafe { HVec(self.nodes[node].layers[layer].weak()) }
     }
 }
-impl<K, V, HK, Strategy> HggCore<K, V, HK, Strategy>
+impl<M, K, V, HK, Strategy> HggCore<M, K, V, HK, Strategy>
 where
-    K: MetricPoint,
-    Self: HggInternal<K = K, V = V, HK = HK>,
+    M: Metric<K>,
+    Self: HggInternal<M = M, K = K, V = V, HK = HK>,
 {
     /// Insert a (key, value) pair.
     fn insert(&mut self, key: K, value: V) -> usize {
@@ -698,7 +768,7 @@ where
         for node in self.stales().take(freshens).collect::<Vec<_>>() {
             // Start by reducing as many connections as possible on the layers it exists.
             for layer in 0..self.nodes[node].layers() {
-                self.optimize_layer_neighborhood(layer, node, node, K::Metric::zero(), true)
+                self.optimize_layer_neighborhood(layer, node, node, M::Unit::zero(), true)
             }
             // Next we want to check, starting on this node's highest layer, if it should be added to the next layer.
             for layer in self.nodes[node].layers() - 1..self.layers() {
@@ -752,7 +822,7 @@ where
     /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    fn search(&self, query: &K) -> Option<(usize, K::Metric)> {
+    fn search(&self, query: &K) -> Option<(usize, M::Unit)> {
         self.search_to_layer(0, query)
     }
 
@@ -813,9 +883,9 @@ where
     fn search_layer_from_weak(
         &self,
         from: HVec<HK>,
-        from_distance: K::Metric,
+        from_distance: M::Unit,
         query: &K,
-    ) -> (HVec<HK>, K::Metric) {
+    ) -> (HVec<HK>, M::Unit) {
         let mut best_weak = from;
         let mut best_distance = from_distance;
 
@@ -835,12 +905,12 @@ where
     /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns `(node, distance)`.
-    fn search_to_layer(&self, final_layer: usize, query: &K) -> Option<(usize, K::Metric)> {
+    fn search_to_layer(&self, final_layer: usize, query: &K) -> Option<(usize, M::Unit)> {
         if self.is_empty() {
             return None;
         }
         let mut node = self.root;
-        let mut distance = self.nodes[node].key.distance(query);
+        let mut distance = self.metric.distance(&self.nodes[node].key, query);
         // This assumes that the top layer only contains one node (as it should).
         for layer in (final_layer..self.layers() - 1).rev() {
             let node_weak = self.layer_node_weak(layer, node);
@@ -856,13 +926,13 @@ where
     /// This is faster than calling [`Hgg::search_knn`] with `num` of `1`.
     ///
     /// Returns the greedy search result on every layer as `(node, distance)`.
-    fn search_path(&self, query: &K) -> Vec<(usize, K::Metric)> {
+    fn search_path(&self, query: &K) -> Vec<(usize, M::Unit)> {
         if self.is_empty() {
             return vec![];
         }
         let init_node = self.root;
-        let init_distance = self.nodes[init_node].key.distance(query);
-        let mut path: Vec<(usize, K::Metric)> = iter::repeat_with(|| (init_node, init_distance))
+        let init_distance = self.metric.distance(&self.nodes[init_node].key, query);
+        let mut path: Vec<(usize, M::Unit)> = iter::repeat_with(|| (init_node, init_distance))
             .take(self.layers())
             .collect();
         // This assumes that the top layer only contains one node (as it should).
@@ -881,10 +951,10 @@ where
     fn search_layer_knn_from_weak(
         &self,
         from: HVec<HK>,
-        from_distance: K::Metric,
+        from_distance: M::Unit,
         query: &K,
         num: usize,
-    ) -> Vec<(HVec<HK>, K::Metric, bool)> {
+    ) -> Vec<(HVec<HK>, M::Unit, bool)> {
         if num == 0 {
             return vec![];
         }
@@ -916,7 +986,7 @@ where
                     }
 
                     // Compute the distance from the query.
-                    let distance = query.distance(self.edge_get_key(edge));
+                    let distance = self.metric.distance(query, self.edge_get_key(edge));
                     // If we dont have enough yet, add it.
                     if bests.len() < num {
                         bests.insert(
@@ -985,13 +1055,13 @@ where
         self.edges[layer] += 1;
     }
 
-    fn best_neighbor_distance(&self, node: &HVec<HK>, query: &K) -> Option<(HVec<HK>, K::Metric)> {
+    fn best_neighbor_distance(&self, node: &HVec<HK>, query: &K) -> Option<(HVec<HK>, M::Unit)> {
         node.as_slice()
             .iter()
             .map(|edge| {
                 (
                     edge.neighbor.weak(),
-                    self.edge_get_key(edge).distance(query),
+                    self.metric.distance(self.edge_get_key(edge), query),
                 )
             })
             .min_by_key(|(_, distance)| *distance)
@@ -1003,26 +1073,36 @@ where
     /// performs kNN search.
     ///
     /// Returns `(node, distance)`.
-    fn search_knn(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, K::Metric)> + '_ {
-        let mapfn = |(weak, distance, _): (HVec<HK>, K::Metric, bool)| (weak.node, distance);
+    fn search_knn(&self, query: &K, num: usize) -> impl Iterator<Item = (usize, M::Unit)> + '_ {
+        let mapfn = |(weak, distance, _): (HVec<HK>, M::Unit, bool)| (weak.node, distance);
         if let Some((node, distance)) = self.search_to_layer(0, query) {
-            self.search_layer_knn_from_weak(self.layer_node_weak(0, node), distance, query, num)
-                .into_iter()
-                .map(mapfn)
+            self.search_layer_knn_from_weak(
+                self.layer_node_weak(0, node),
+                distance,
+                query,
+                num + self.search_extra_knn,
+            )
+            .into_iter()
+            .take(num)
+            .map(mapfn)
         } else {
-            vec![].into_iter().map(mapfn)
+            vec![].into_iter().take(num).map(mapfn)
         }
     }
 }
 
-impl<K, V, HK, Strategy> Default for HggCore<K, V, HK, Strategy> {
+impl<M, K, V, HK, Strategy> Default for HggCore<M, K, V, HK, Strategy>
+where
+    M: Default,
+{
     fn default() -> Self {
-        Self::new()
+        Self::new(M::default())
     }
 }
 
 trait HggInternal {
-    type K: MetricPoint;
+    type M: Metric<Self::K>;
+    type K;
     type V;
     type HK;
     fn make_edge_to_node(&self, node: &HVec<Self::HK>) -> HggEdge<Self::HK>;
@@ -1039,15 +1119,17 @@ trait HggInternal {
         layer: usize,
         node: usize,
         found: usize,
-        distance: <Self::K as MetricPoint>::Metric,
+        distance: <Self::M as Metric<Self::K>>::Unit,
         reconnect: bool,
     );
 }
 
-impl<K, V> HggInternal for HggCore<K, V, K, StrategyRegular>
+impl<M, K, V> HggInternal for HggCore<M, K, V, K, StrategyRegular>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
 {
+    type M = M;
     type K = K;
     type V = V;
     type HK = K;
@@ -1079,7 +1161,7 @@ where
         layer: usize,
         node: usize,
         found: usize,
-        distance: K::Metric,
+        distance: M::Unit,
         reconnect: bool,
     ) {
         // Get the node's weak ref.
@@ -1109,7 +1191,7 @@ where
         let mut knn_index = 0;
         'knn_next: while let Some((target_node, target_key)) = knn.get(knn_index).cloned() {
             // Get this node's distance.
-            let to_beat = node.key.distance(&target_key);
+            let to_beat = self.metric.distance(&node.key, &target_key);
             // Check if the node is colocated.
             if to_beat == Zero::zero() {
                 // In this case, add an edge (with dedup) between them to make sure there is a path.
@@ -1124,7 +1206,7 @@ where
 
             if neighbors
                 .iter()
-                .any(|key| key.distance(&target_key) < to_beat)
+                .any(|key| self.metric.distance(key, &target_key) < to_beat)
             {
                 // If any are better, then no optimization needed.
                 knn_index += 1;
@@ -1134,7 +1216,7 @@ where
             // Go through the nearest neighbors in order from best to worst.
             for (nn, nn_key) in knn.iter().cloned() {
                 // Compute the distance to the target from the nn.
-                let nn_distance = nn_key.distance(&target_key);
+                let nn_distance = self.metric.distance(&nn_key, &target_key);
                 // Add the node as a neighbor (closer or not).
                 // This will update the weak ref if necessary.
                 if self.layer_add_edge_dedup_weak(
@@ -1158,9 +1240,10 @@ where
     }
 }
 
-impl<K, V> HggCore<K, V, K, StrategyRegular>
+impl<M, K, V> HggCore<M, K, V, K, StrategyRegular>
 where
-    K: MetricPoint + Clone,
+    M: Metric<K>,
+    K: Clone,
 {
     /// Internal function for disconnecting a node from the graph on the layer this HVec exists on.
     ///
@@ -1179,8 +1262,9 @@ where
         self.edges[layer] -= node.len();
         for HggEdge { neighbor, key } in node.as_mut_slice() {
             if !neighbors.iter().any(|&(cn, _)| cn == neighbor.node) {
-                let distance = node_key.distance(key);
-                let pos = neighbors.partition_point(|(_, k)| node_key.distance(k) <= distance);
+                let distance = self.metric.distance(&node_key, key);
+                let pos = neighbors
+                    .partition_point(|(_, k)| self.metric.distance(&node_key, k) <= distance);
                 neighbors.insert(pos, (neighbor.node, key.clone()));
             }
             neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
@@ -1189,10 +1273,11 @@ where
     }
 }
 
-impl<K, V> HggInternal for HggCore<K, V, (), StrategyLite>
+impl<M, K, V> HggInternal for HggCore<M, K, V, (), StrategyLite>
 where
-    K: MetricPoint,
+    M: Metric<K>,
 {
+    type M = M;
     type K = K;
     type V = V;
     type HK = ();
@@ -1223,7 +1308,7 @@ where
         layer: usize,
         node: usize,
         found: usize,
-        distance: K::Metric,
+        distance: M::Unit,
         reconnect: bool,
     ) {
         // Get the node's weak ref.
@@ -1253,9 +1338,9 @@ where
         let mut knn_index = 0;
         'knn_next: while let Some(target_node) = knn.get(knn_index).copied() {
             // Get this node's distance.
-            let to_beat = self.nodes[node.node]
-                .key
-                .distance(&self.nodes[target_node].key);
+            let to_beat = self
+                .metric
+                .distance(&self.nodes[node.node].key, &self.nodes[target_node].key);
             // Check if the node is colocated.
             if to_beat == Zero::zero() {
                 // In this case, add an edge (with dedup) between them to make sure there is a path.
@@ -1269,9 +1354,8 @@ where
             }
 
             if neighbors.iter().any(|&neighbor| {
-                self.nodes[neighbor]
-                    .key
-                    .distance(&self.nodes[target_node].key)
+                self.metric
+                    .distance(&self.nodes[neighbor].key, &self.nodes[target_node].key)
                     < to_beat
             }) {
                 // If any are better, then no optimization needed.
@@ -1282,7 +1366,9 @@ where
             // Go through the nearest neighbors in order from best to worst.
             for nn in knn.iter().copied() {
                 // Compute the distance to the target from the nn.
-                let nn_distance = self.nodes[nn].key.distance(&self.nodes[target_node].key);
+                let nn_distance = self
+                    .metric
+                    .distance(&self.nodes[nn].key, &self.nodes[target_node].key);
                 // Add the node as a neighbor (closer or not).
                 // This will update the weak ref if necessary.
                 if self.layer_add_edge_dedup_weak(
@@ -1306,9 +1392,9 @@ where
     }
 }
 
-impl<K, V> HggCore<K, V, (), StrategyLite>
+impl<M, K, V> HggCore<M, K, V, (), StrategyLite>
 where
-    K: MetricPoint,
+    M: Metric<K>,
 {
     /// Internal function for disconnecting a node from the graph on the layer this HVec exists on.
     ///
@@ -1322,11 +1408,13 @@ where
         let node_index = node.node;
         for HggEdge { neighbor, .. } in node.as_mut_slice() {
             if !neighbors.iter().any(|&cn| cn == neighbor.node) {
-                let distance = self.nodes[neighbor.node]
-                    .key
-                    .distance(&self.nodes[node_index].key);
+                let distance = self
+                    .metric
+                    .distance(&self.nodes[neighbor.node].key, &self.nodes[node_index].key);
                 let pos = neighbors.partition_point(|&cnn| {
-                    self.nodes[cnn].key.distance(&self.nodes[node_index].key) <= distance
+                    self.metric
+                        .distance(&self.nodes[cnn].key, &self.nodes[node_index].key)
+                        <= distance
                 });
                 neighbors.insert(pos, neighbor.node);
             }

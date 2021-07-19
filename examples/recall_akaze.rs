@@ -1,10 +1,10 @@
 extern crate std;
 
-use bitarray::BitArray;
+use bitarray::{BitArray, Hamming};
 use hgg::Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
-use space::Knn;
+use space::{Knn, KnnInsert};
 use std::{io::Read, time::Instant};
 
 // Dataset sizes.
@@ -80,7 +80,7 @@ fn retrieve_search_and_train(rng: &mut impl Rng) -> Dataset {
 
 fn main() {
     let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(0);
-    let mut hgg = Hgg::new();
+    let mut hgg = Hgg::new(Hamming);
     let Dataset { search, test } = retrieve_search_and_train(&mut rng);
 
     let stdout = std::io::stdout();
@@ -131,10 +131,11 @@ fn main() {
 
         for knn in 1..=HIGHEST_KNN {
             eprintln!("doing size {} with knn {}", 1 << pow, knn);
+            hgg = hgg.search_extra_knn(knn - 1);
             let start_time = Instant::now();
             let hgg_nn_distances: Vec<_> = test
                 .iter()
-                .map(|query| hgg.knn(query, knn)[0].distance)
+                .map(|query| hgg.nn(query).unwrap().distance)
                 .collect();
             let end_time = Instant::now();
             let num_correct = correct_nn_distances
