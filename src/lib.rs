@@ -1159,13 +1159,13 @@ where
     fn optimize_layer_neighborhood(
         &mut self,
         layer: usize,
-        node: usize,
+        node_id: usize,
         found: usize,
         distance: M::Unit,
         reconnect: bool,
     ) {
         // Get the node's weak ref.
-        let mut node = self.layer_node_weak(layer, node);
+        let mut node = self.layer_node_weak(layer, node_id);
 
         // Do a knn search on this layer, starting at the found node.
         let mut knn: Vec<(usize, K)> = self
@@ -1181,12 +1181,25 @@ where
             .collect();
 
         // If we are reconnecting the node, we need to disconnect its edges first.
-        if reconnect {
-            self.disconnect_layer(layer, &mut node, &mut knn);
+        let old_neighbors = if reconnect {
+            self.disconnect_layer(layer, &mut node)
+        } else {
+            vec![]
+        };
+
+        // Add the old neighbors to the knn.
+        for (old_neighbor, distance, old_key) in &old_neighbors {
+            // Check if it is not contained in the knn.
+            if !knn.iter().any(|&(kn, _)| kn == *old_neighbor) {
+                // In this case, add it to the correct spot in the knn.
+                let pos =
+                    knn.partition_point(|(_, k)| self.metric.distance(k, &node.key) <= *distance);
+                knn.insert(pos, (*old_neighbor, old_key.clone()));
+            }
         }
 
         // The initial neighbors only includes the edge we just added.
-        let mut neighbors: Vec<K> = Vec::with_capacity(self.insert_knn);
+        let mut neighbors: Vec<K> = Vec::with_capacity(knn.len());
 
         let mut knn_index = 0;
         'knn_next: while let Some((target_node, target_key)) = knn.get(knn_index).cloned() {
@@ -1237,6 +1250,22 @@ where
                 "we should always be able to connect to all the neighbors using themselves"
             );
         }
+
+        // Make sure we can still connect to the old neighbors.
+        for (old_neighbor, distance, old_key) in old_neighbors {
+            let (mut found, _) = self.search_layer_from_weak(
+                self.layer_node_weak(layer, node_id),
+                distance,
+                &old_key,
+            );
+            if found.node != old_neighbor {
+                self.layer_add_edge_dedup_weak(
+                    layer,
+                    &mut found,
+                    &mut self.layer_node_weak(layer, old_neighbor),
+                );
+            }
+        }
     }
 }
 
@@ -1251,25 +1280,19 @@ where
     /// and break the weak pointers.
     ///
     /// Returns (node, distance) pairs.
-    fn disconnect_layer(
-        &mut self,
-        layer: usize,
-        node: &mut HVec<K>,
-        neighbors: &mut Vec<(usize, K)>,
-    ) {
+    fn disconnect_layer(&mut self, layer: usize, node: &mut HVec<K>) -> Vec<(usize, M::Unit, K)> {
+        let mut old_neighbors = Vec::with_capacity(node.len());
         let node_key = node.key.clone();
         let ptr = node.ptr();
         self.edges[layer] -= node.len();
         for HggEdge { neighbor, key } in node.as_mut_slice() {
-            if !neighbors.iter().any(|&(cn, _)| cn == neighbor.node) {
-                let distance = self.metric.distance(&node_key, key);
-                let pos = neighbors
-                    .partition_point(|(_, k)| self.metric.distance(&node_key, k) <= distance);
-                neighbors.insert(pos, (neighbor.node, key.clone()));
-            }
+            let distance = self.metric.distance(&node_key, key);
+            let pos = old_neighbors.partition_point(|&(_, d, _)| d <= distance);
+            old_neighbors.insert(pos, (neighbor.node, distance, key.clone()));
             neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
         }
         node.retain(|_| false);
+        old_neighbors
     }
 }
 
@@ -1306,20 +1329,20 @@ where
     fn optimize_layer_neighborhood(
         &mut self,
         layer: usize,
-        node: usize,
+        node_id: usize,
         found: usize,
         distance: M::Unit,
         reconnect: bool,
     ) {
         // Get the node's weak ref.
-        let mut node = self.layer_node_weak(layer, node);
+        let mut node = self.layer_node_weak(layer, node_id);
 
         // Do a knn search on this layer, starting at the found node.
         let mut knn: Vec<usize> = self
             .search_layer_knn_from_weak(
                 self.layer_node_weak(layer, found),
                 distance,
-                &self.nodes[node.node].key,
+                &self.nodes[node_id].key,
                 self.insert_knn,
             )
             .into_iter()
@@ -1328,19 +1351,35 @@ where
             .collect();
 
         // If we are reconnecting the node, we need to disconnect its edges first.
-        if reconnect {
-            self.disconnect_layer(layer, &mut node, &mut knn);
+        let old_neighbors = if reconnect {
+            self.disconnect_layer(layer, &mut node)
+        } else {
+            vec![]
+        };
+
+        // Add the old neighbors to the knn.
+        for &(old_neighbor, distance) in &old_neighbors {
+            // Check if it is not contained in the knn.
+            if !knn.iter().any(|&kn| kn == old_neighbor) {
+                // In this case, add it to the correct spot in the knn.
+                let pos = knn.partition_point(|&kn| {
+                    self.metric
+                        .distance(&self.nodes[kn].key, &self.nodes[node_id].key)
+                        <= distance
+                });
+                knn.insert(pos, old_neighbor);
+            }
         }
 
         // The initial neighbors only includes the edge we just added.
-        let mut neighbors: Vec<usize> = Vec::with_capacity(self.insert_knn);
+        let mut neighbors: Vec<usize> = Vec::with_capacity(knn.len());
 
         let mut knn_index = 0;
         'knn_next: while let Some(target_node) = knn.get(knn_index).copied() {
             // Get this node's distance.
             let to_beat = self
                 .metric
-                .distance(&self.nodes[node.node].key, &self.nodes[target_node].key);
+                .distance(&self.nodes[node_id].key, &self.nodes[target_node].key);
             // Check if the node is colocated.
             if to_beat == Zero::zero() {
                 // In this case, add an edge (with dedup) between them to make sure there is a path.
@@ -1389,6 +1428,22 @@ where
                 "we should always be able to connect to all the neighbors using themselves"
             );
         }
+
+        // Make sure we can still connect to the old neighbors.
+        for (old_neighbor, distance) in old_neighbors {
+            let (mut found, _) = self.search_layer_from_weak(
+                self.layer_node_weak(layer, node_id),
+                distance,
+                &self.nodes[old_neighbor].key,
+            );
+            if found.node != old_neighbor {
+                self.layer_add_edge_dedup_weak(
+                    layer,
+                    &mut found,
+                    &mut self.layer_node_weak(layer, old_neighbor),
+                );
+            }
+        }
     }
 }
 
@@ -1402,24 +1457,20 @@ where
     /// and break the weak pointers.
     ///
     /// Returns (node, distance) pairs.
-    fn disconnect_layer(&mut self, layer: usize, node: &mut HVec<()>, neighbors: &mut Vec<usize>) {
+    fn disconnect_layer(&mut self, layer: usize, node: &mut HVec<()>) -> Vec<(usize, M::Unit)> {
+        let mut old_neighbors: Vec<(usize, M::Unit)> = Vec::with_capacity(node.len());
         let ptr = node.ptr();
         self.edges[layer] -= node.len();
         let node_index = node.node;
         for HggEdge { neighbor, .. } in node.as_mut_slice() {
-            if !neighbors.iter().any(|&cn| cn == neighbor.node) {
-                let distance = self
-                    .metric
-                    .distance(&self.nodes[neighbor.node].key, &self.nodes[node_index].key);
-                let pos = neighbors.partition_point(|&cnn| {
-                    self.metric
-                        .distance(&self.nodes[cnn].key, &self.nodes[node_index].key)
-                        <= distance
-                });
-                neighbors.insert(pos, neighbor.node);
-            }
+            let distance = self
+                .metric
+                .distance(&self.nodes[neighbor.node].key, &self.nodes[node_index].key);
+            let pos = old_neighbors.partition_point(|&(_, d)| d <= distance);
+            old_neighbors.insert(pos, (neighbor.node, distance));
             neighbor.retain(|HggEdge { neighbor, .. }| !neighbor.is(ptr));
         }
         node.retain(|_| false);
+        old_neighbors
     }
 }

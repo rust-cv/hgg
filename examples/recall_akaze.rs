@@ -1,7 +1,7 @@
 extern crate std;
 
 use bitarray::{BitArray, Hamming};
-use hgg::Hgg;
+use hgg::HggLite as Hgg;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use serde::Serialize;
 use space::{Knn, KnnInsert};
